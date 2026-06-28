@@ -1,0 +1,59 @@
+use prometheus::{
+    register_counter_vec, register_gauge, register_int_gauge, CounterVec, Gauge, IntGauge,
+    TextEncoder,
+};
+use std::sync::OnceLock;
+use std::time::Instant;
+
+static START_TIME: OnceLock<Instant> = OnceLock::new();
+
+pub struct Metrics {
+    pub http_requests_total: CounterVec,
+    pub containers_total: IntGauge,
+    pub uptime_seconds: Gauge,
+}
+
+static METRICS: OnceLock<Metrics> = OnceLock::new();
+
+pub fn init() {
+    START_TIME.get_or_init(Instant::now);
+    METRICS.get_or_init(|| Metrics {
+        http_requests_total: register_counter_vec!(
+            "beacon_http_requests_total",
+            "Total number of HTTP requests",
+            &["method", "endpoint", "status"]
+        )
+        .expect("Failed to register http_requests_total"),
+        containers_total: register_int_gauge!(
+            "beacon_containers_total",
+            "Number of containers known to Docker"
+        )
+        .expect("Failed to register containers_total"),
+        uptime_seconds: register_gauge!("beacon_uptime_seconds", "Seconds since Beacon started")
+            .expect("Failed to register uptime_seconds"),
+    });
+}
+
+pub fn record_request(method: &str, endpoint: &str, status: &str) {
+    METRICS
+        .get()
+        .expect("metrics not initialized")
+        .http_requests_total
+        .with_label_values(&[method, endpoint, status])
+        .inc();
+}
+
+pub fn set_container_count(n: i64) {
+    METRICS.get().expect("metrics not initialized").containers_total.set(n);
+}
+
+pub fn render() -> String {
+    if let Some(m) = METRICS.get() {
+        if let Some(t) = START_TIME.get() {
+            m.uptime_seconds.set(t.elapsed().as_secs_f64());
+        }
+    }
+    TextEncoder::new()
+        .encode_to_string(&prometheus::gather())
+        .unwrap_or_default()
+}
