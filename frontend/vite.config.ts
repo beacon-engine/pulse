@@ -4,7 +4,7 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 export default defineConfig({
   plugins: [svelte()],
   server: {
-    port: 5173,
+    port: 9003,
     proxy: {
       '/api': 'http://localhost:9000',
       '/metrics': 'http://localhost:9000',

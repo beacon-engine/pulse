@@ -1,9 +1,9 @@
 import axios from 'axios';
 import type { AxiosInstance, CreateAxiosDefaults } from 'axios';
-import type { Container, ContainerDetail, ContainerEvent, K8sNamespace, K8sPod, SavedStack, Stack, SwarmNode, SwarmService } from '../types/containers';
+import type { Container, ContainerDetail, ContainerEvent, ContainerNetworkInfo, DockerImage, DockerVolume, EnvVar, HardwareMetrics, HostNetwork, K8sNamespace, K8sPod, SavedStack, Stack, SwarmNode, SwarmService, SystemInfo } from '../types/containers';
 import type { Environment } from '../types/environments';
 
-export type { Container, ContainerDetail, ContainerEvent, K8sNamespace, K8sPod, SavedStack, Stack, SwarmNode, SwarmService, Environment };
+export type { Container, ContainerDetail, ContainerEvent, ContainerNetworkInfo, DockerImage, DockerVolume, EnvVar, HardwareMetrics, HostNetwork, K8sNamespace, K8sPod, SavedStack, Stack, SwarmNode, SwarmService, SystemInfo, Environment };
 
 export class BeaconClient {
   private http: AxiosInstance;
@@ -82,6 +82,84 @@ export class BeaconClient {
     return data;
   }
 
+  async execContainer(hostId: string, containerId: string, cmd: string[]): Promise<string> {
+    const { data } = await this.http.post<string>(
+      `/hosts/${hostId}/containers/${containerId}/exec`,
+      { cmd },
+      { responseType: 'text' },
+    );
+    return data;
+  }
+
+  // ── Networks ──────────────────────────────────────────────────────────────
+
+  async listHostNetworks(hostId: string): Promise<HostNetwork[]> {
+    const { data } = await this.http.get<HostNetwork[]>(`/hosts/${hostId}/networks`);
+    return data;
+  }
+
+  async getContainerNetworks(hostId: string, containerId: string): Promise<ContainerNetworkInfo[]> {
+    const { data } = await this.http.get<ContainerNetworkInfo[]>(`/hosts/${hostId}/containers/${containerId}/networks`);
+    return data;
+  }
+
+  async networkConnect(hostId: string, containerId: string, networkId: string): Promise<void> {
+    await this.http.post(`/hosts/${hostId}/containers/${containerId}/networks/connect`, { network_id: networkId });
+  }
+
+  async networkDisconnect(hostId: string, containerId: string, networkId: string): Promise<void> {
+    await this.http.post(`/hosts/${hostId}/containers/${containerId}/networks/disconnect`, { network_id: networkId });
+  }
+
+  // ── Prometheus proxy ──────────────────────────────────────────────────────
+
+  async prometheusQuery(prometheusUrl: string, query: string): Promise<unknown> {
+    const { data } = await this.http.get('/prometheus/query', {
+      params: { url: prometheusUrl, q: query },
+    });
+    return data;
+  }
+
+  // ── System ────────────────────────────────────────────────────────────────
+
+  async getSystemInfo(hostId: string): Promise<SystemInfo> {
+    const { data } = await this.http.get<SystemInfo>(`/hosts/${hostId}/system`);
+    return data;
+  }
+
+  async getHardwareMetrics(hostId: string): Promise<HardwareMetrics> {
+    const { data } = await this.http.get<HardwareMetrics>(`/hosts/${hostId}/hardware`);
+    return data;
+  }
+
+  async getImages(hostId: string): Promise<DockerImage[]> {
+    const { data } = await this.http.get<DockerImage[]>(`/hosts/${hostId}/images`);
+    return data;
+  }
+
+  async deleteImage(hostId: string, imageId: string): Promise<void> {
+    await this.http.delete(`/hosts/${hostId}/images/${imageId}`);
+  }
+
+  async pruneDanglingImages(hostId: string): Promise<{ reclaimed: number }> {
+    const { data } = await this.http.post<{ reclaimed: number }>(`/hosts/${hostId}/images/prune`);
+    return data;
+  }
+
+  async getVolumes(hostId: string): Promise<DockerVolume[]> {
+    const { data } = await this.http.get<DockerVolume[]>(`/hosts/${hostId}/volumes`);
+    return data;
+  }
+
+  async deleteVolume(hostId: string, name: string): Promise<void> {
+    await this.http.delete(`/hosts/${hostId}/volumes/${encodeURIComponent(name)}`);
+  }
+
+  async pruneVolumes(hostId: string): Promise<{ reclaimed: number }> {
+    const { data } = await this.http.post<{ reclaimed: number }>(`/hosts/${hostId}/volumes/prune`);
+    return data;
+  }
+
   async getContainerLogs(hostId: string, containerId: string, tail = 200): Promise<string> {
     const { data } = await this.http.get<string>(
       `/hosts/${hostId}/containers/${containerId}/logs`,
@@ -107,9 +185,18 @@ export class BeaconClient {
     return data;
   }
 
-  async updateSavedStack(id: string, content: string): Promise<SavedStack> {
-    const { data } = await this.http.put<SavedStack>(`/stacks/${id}`, { content });
+  async updateSavedStack(id: string, content: string, envVars?: EnvVar[]): Promise<SavedStack> {
+    const { data } = await this.http.put<SavedStack>(`/stacks/${id}`, { content, env_vars: envVars ?? null });
     return data;
+  }
+
+  async generateStackToken(id: string): Promise<{ token: string }> {
+    const { data } = await this.http.post<{ token: string }>(`/stacks/${id}/token`);
+    return data;
+  }
+
+  async deleteStackToken(id: string): Promise<void> {
+    await this.http.delete(`/stacks/${id}/token`);
   }
 
   async deleteSavedStack(id: string): Promise<void> {
@@ -148,10 +235,39 @@ export class BeaconClient {
   // ── Webhooks ─────────────────────────────────────────────────────────────────
 
   async webhookRecreate(hostId: string, containerId: string, pull = false): Promise<{ id: string; pulled: boolean }> {
-    const { data } = await this.http.post(`/webhooks/${hostId}/${containerId}/recreate`, null, {
-      params: { pull },
-    });
+    const { data } = await this.http.post(`/webhooks/${hostId}/${containerId}/recreate`, null, { params: { pull } });
     return data;
+  }
+
+  async webhookRedeployStack(hostId: string, stackId: string, pull = true, token?: string): Promise<{ id: string; status: string; output: string }> {
+    const { data } = await this.http.post(`/webhooks/${hostId}/stacks/${stackId}/redeploy`, null, { params: { pull, token } });
+    return data;
+  }
+
+  async webhookUpdateSwarm(hostId: string, serviceId: string, token?: string): Promise<{ service: string; updated: boolean }> {
+    const { data } = await this.http.post(`/webhooks/${hostId}/swarm/${serviceId}/update`, null, { params: { token } });
+    return data;
+  }
+
+  async webhookRolloutK8s(hostId: string, namespace: string, deployment: string, token?: string): Promise<{ namespace: string; deployment: string; restarted: boolean }> {
+    const { data } = await this.http.post(`/webhooks/${hostId}/k8s/${namespace}/${deployment}/rollout`, null, { params: { token } });
+    return data;
+  }
+
+  // ── Webhook token management ──────────────────────────────────────────────
+
+  async getWebhookToken(hostId: string, entityType: string, entityKey: string): Promise<{ enabled: boolean; token: string | null }> {
+    const { data } = await this.http.get(`/webhooks/${hostId}/${entityType}/${entityKey}/token`);
+    return data;
+  }
+
+  async generateWebhookToken(hostId: string, entityType: string, entityKey: string): Promise<{ token: string }> {
+    const { data } = await this.http.post(`/webhooks/${hostId}/${entityType}/${entityKey}/token`);
+    return data;
+  }
+
+  async deleteWebhookToken(hostId: string, entityType: string, entityKey: string): Promise<void> {
+    await this.http.delete(`/webhooks/${hostId}/${entityType}/${entityKey}/token`);
   }
 
   // ── Kubernetes ─────────────────────────────────────────────────────────────

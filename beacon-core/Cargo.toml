@@ -41,3 +41,6 @@ async-trait = "0.1"
 
 # UUID generation for environment IDs
 uuid = { version = "1", features = ["v4"] }
+
+# System hardware metrics
+sysinfo = "0.32"

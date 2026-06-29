@@ -381,6 +381,334 @@ pub async fn list_stacks(docker: &Docker) -> Result<Vec<Stack>, bollard::errors:
     Ok(stacks)
 }
 
+// ── System info ───────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct SystemInfo {
+    pub docker_version: String,
+    pub api_version: String,
+    pub os: String,
+    pub arch: String,
+    pub kernel: String,
+    pub total_memory: i64,
+    pub cpus: i64,
+    pub containers_running: i64,
+    pub containers_stopped: i64,
+    pub images: i64,
+}
+
+pub async fn system_info(docker: &Docker) -> Result<SystemInfo, bollard::errors::Error> {
+    let info = docker.info().await?;
+    Ok(SystemInfo {
+        docker_version: info.server_version.unwrap_or_default(),
+        api_version: "1.43".into(),
+        os: format!(
+            "{} {}",
+            info.operating_system.unwrap_or_default(),
+            info.os_version.unwrap_or_default()
+        )
+        .trim()
+        .to_string(),
+        arch: info.architecture.unwrap_or_default(),
+        kernel: info.kernel_version.unwrap_or_default(),
+        total_memory: info.mem_total.unwrap_or(0),
+        cpus: info.ncpu.unwrap_or(0),
+        containers_running: info.containers_running.unwrap_or(0),
+        containers_stopped: info.containers_paused.unwrap_or(0)
+            + info.containers_stopped.unwrap_or(0),
+        images: info.images.unwrap_or(0) as i64,
+    })
+}
+
+// ── Images ────────────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct ImageInfo {
+    pub id: String,
+    pub tags: Vec<String>,
+    pub size: i64,
+    pub created: i64,
+    pub dangling: bool,
+}
+
+pub async fn list_images(docker: &Docker) -> Result<Vec<ImageInfo>, bollard::errors::Error> {
+    use bollard::image::ListImagesOptions;
+    let images = docker
+        .list_images(Some(ListImagesOptions::<String> { all: false, ..Default::default() }))
+        .await?;
+    Ok(images
+        .into_iter()
+        .map(|img| {
+            let dangling = img.repo_tags.is_empty()
+                || img.repo_tags.iter().all(|t| t == "<none>:<none>");
+            ImageInfo {
+                id: img.id,
+                tags: img.repo_tags.into_iter().filter(|t| t != "<none>:<none>").collect(),
+                size: img.size,
+                created: img.created,
+                dangling,
+            }
+        })
+        .collect())
+}
+
+pub async fn delete_image(docker: &Docker, id: &str) -> Result<(), bollard::errors::Error> {
+    use bollard::image::RemoveImageOptions;
+    docker.remove_image(id, Some(RemoveImageOptions { force: true, ..Default::default() }), None).await?;
+    Ok(())
+}
+
+pub async fn prune_images(docker: &Docker) -> Result<i64, bollard::errors::Error> {
+    use bollard::image::PruneImagesOptions;
+    let result = docker.prune_images(Some(PruneImagesOptions::<String>::default())).await?;
+    Ok(result.space_reclaimed.unwrap_or(0))
+}
+
+// ── Volumes ───────────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct VolumeInfo {
+    pub name: String,
+    pub driver: String,
+    pub mountpoint: String,
+    pub created: String,
+}
+
+pub async fn list_volumes(docker: &Docker) -> Result<Vec<VolumeInfo>, bollard::errors::Error> {
+    let result = docker
+        .list_volumes(None::<bollard::query_parameters::ListVolumesOptions>)
+        .await?;
+    Ok(result
+        .volumes
+        .unwrap_or_default()
+        .into_iter()
+        .map(|v| VolumeInfo {
+            name: v.name,
+            driver: v.driver,
+            mountpoint: v.mountpoint,
+            created: v.created_at.unwrap_or_default(),
+        })
+        .collect())
+}
+
+pub async fn delete_volume(docker: &Docker, name: &str) -> Result<(), bollard::errors::Error> {
+    use bollard::volume::RemoveVolumeOptions;
+    docker.remove_volume(name, Some(RemoveVolumeOptions { force: true })).await
+}
+
+pub async fn prune_volumes(docker: &Docker) -> Result<i64, bollard::errors::Error> {
+    let result = docker
+        .prune_volumes(None::<bollard::query_parameters::PruneVolumesOptions>)
+        .await?;
+    Ok(result.space_reclaimed.unwrap_or(0))
+}
+
+// ── Networks ──────────────────────────────────────────────────────────────────
+
+#[derive(Serialize, Clone)]
+pub struct HostNetwork {
+    pub id: String,
+    pub name: String,
+    pub driver: String,
+    pub scope: String,
+    pub internal: bool,
+}
+
+#[derive(Serialize, Clone)]
+pub struct ContainerNetworkInfo {
+    pub id: String,
+    pub name: String,
+    pub ip_address: String,
+    pub gateway: String,
+    pub mac_address: String,
+}
+
+pub async fn list_host_networks(docker: &Docker) -> Result<Vec<HostNetwork>, bollard::errors::Error> {
+    let nets = docker.list_networks(None::<bollard::network::ListNetworksOptions<String>>).await?;
+    Ok(nets
+        .into_iter()
+        .map(|n| HostNetwork {
+            id: n.id.unwrap_or_default(),
+            name: n.name.unwrap_or_default(),
+            driver: n.driver.unwrap_or_default(),
+            scope: n.scope.unwrap_or_default(),
+            internal: n.internal.unwrap_or(false),
+        })
+        .collect())
+}
+
+pub async fn get_container_networks(
+    docker: &Docker,
+    container_id: &str,
+) -> Result<Vec<ContainerNetworkInfo>, bollard::errors::Error> {
+    let info = docker.inspect_container(container_id, None::<InspectContainerOptions>).await?;
+    let map = info
+        .network_settings
+        .and_then(|ns| ns.networks)
+        .unwrap_or_default();
+    Ok(map
+        .into_iter()
+        .map(|(name, ep)| ContainerNetworkInfo {
+            id: ep.network_id.unwrap_or_default(),
+            name,
+            ip_address: ep.ip_address.unwrap_or_default(),
+            gateway: ep.gateway.unwrap_or_default(),
+            mac_address: ep.mac_address.unwrap_or_default(),
+        })
+        .collect())
+}
+
+pub async fn connect_to_network(
+    docker: &Docker,
+    network_id: &str,
+    container_id: &str,
+) -> Result<(), bollard::errors::Error> {
+    docker
+        .connect_network(
+            network_id,
+            bollard::network::ConnectNetworkOptions {
+                container: container_id,
+                endpoint_config: bollard::models::EndpointSettings::default(),
+            },
+        )
+        .await
+}
+
+pub async fn disconnect_from_network(
+    docker: &Docker,
+    network_id: &str,
+    container_id: &str,
+) -> Result<(), bollard::errors::Error> {
+    docker
+        .disconnect_network(
+            network_id,
+            bollard::network::DisconnectNetworkOptions {
+                container: container_id,
+                force: false,
+            },
+        )
+        .await
+}
+
+// ── Exec a command inside a container ─────────────────────────────────────────
+
+pub async fn exec_command(
+    docker: &Docker,
+    container_id: &str,
+    cmd: Vec<String>,
+) -> Result<String, bollard::errors::Error> {
+    use bollard::exec::{CreateExecOptions, StartExecResults};
+
+    let exec = docker
+        .create_exec(
+            container_id,
+            CreateExecOptions {
+                attach_stdout: Some(true),
+                attach_stderr: Some(true),
+                cmd: Some(cmd),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    let mut out = String::new();
+    if let StartExecResults::Attached { mut output, .. } =
+        docker.start_exec(&exec.id, None).await?
+    {
+        while let Some(Ok(msg)) = output.next().await {
+            match msg {
+                LogOutput::StdOut { message } | LogOutput::StdErr { message } => {
+                    out.push_str(&String::from_utf8_lossy(&message));
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(out)
+}
+
+// ── Hardware metrics (local machine) ──────────────────────────────────────────
+
+#[derive(serde::Serialize, Clone)]
+pub struct DiskInfo {
+    pub name: String,
+    pub mount: String,
+    pub total: u64,
+    pub used: u64,
+    pub pct: f32,
+}
+
+#[derive(serde::Serialize)]
+pub struct HardwareMetrics {
+    pub mem_used: u64,
+    pub mem_total: u64,
+    pub mem_pct: f32,
+    pub disks: Vec<DiskInfo>,
+}
+
+pub fn hardware_metrics() -> HardwareMetrics {
+    use sysinfo::System;
+
+    let mut sys = System::new();
+    sys.refresh_memory();
+
+    let mem_total = sys.total_memory();
+    let mem_used = sys.used_memory();
+    let mem_pct = if mem_total > 0 { mem_used as f32 / mem_total as f32 * 100.0 } else { 0.0 };
+
+    HardwareMetrics { mem_used, mem_total, mem_pct, disks: disk_metrics() }
+}
+
+fn disk_metrics() -> Vec<DiskInfo> {
+    use sysinfo::Disks;
+    use std::collections::HashMap;
+
+    let list = Disks::new_with_refreshed_list();
+
+    // On macOS, multiple APFS logical volumes share the same physical container
+    // and report identical (total, available) stats. Deduplicate by those values
+    // and keep the entry with the highest mount priority.
+    let mut best: HashMap<(u64, u64), (i32, DiskInfo)> = HashMap::new();
+
+    for d in list.iter() {
+        let total = d.total_space();
+        // Skip tiny/virtual volumes (< 1 GB)
+        if total < 1_000_000_000 { continue; }
+
+        let mount = d.mount_point().to_string_lossy().to_string();
+
+        // Skip noisy/internal macOS paths
+        if mount.contains("AppTranslocation") { continue; }
+        if mount.contains("CoreSimulator") { continue; }
+        if mount.starts_with("/private/var/") { continue; }
+        if mount.starts_with("/System/Volumes/") { continue; }
+
+        let priority: i32 = if mount == "/" { 100 }
+            else if mount.starts_with("/Volumes/") { 50 } // external drives
+            else { 10 };
+
+        let available = d.available_space();
+        let used = total.saturating_sub(available);
+        let pct = if total > 0 { used as f32 / total as f32 * 100.0 } else { 0.0 };
+
+        let info = DiskInfo {
+            name: d.name().to_string_lossy().to_string(),
+            mount: mount.clone(),
+            total, used, pct,
+        };
+
+        let key = (total, available);
+        let entry = best.entry(key).or_insert((priority, info.clone()));
+        if priority > entry.0 {
+            *entry = (priority, info);
+        }
+    }
+
+    let mut result: Vec<DiskInfo> = best.into_values().map(|(_, d)| d).collect();
+    result.sort_by(|a, b| b.total.cmp(&a.total));
+    result
+}
+
 // ── Basic actions ─────────────────────────────────────────────────────────────
 
 pub async fn start(docker: &Docker, id: &str) -> Result<(), bollard::errors::Error> {

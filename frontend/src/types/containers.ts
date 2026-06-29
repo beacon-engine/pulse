@@ -62,11 +62,18 @@ export interface Stack {
   services: Container[];
 }
 
+export interface EnvVar {
+  key: string;
+  value: string;
+}
+
 export interface SavedStack {
   id: string;
   host_id: string;
   name: string;
   content: string;
+  env_vars: string | null;
+  webhook_token: string | null;
   status: string;
   created_at: string;
   updated_at: string;
@@ -100,4 +107,68 @@ export interface SwarmNode {
   state: string;
   availability: string;
   addr: string;
+}
+
+export interface HostNetwork {
+  id: string;
+  name: string;
+  driver: string;
+  scope: string;
+  internal: boolean;
+}
+
+export interface ContainerNetworkInfo {
+  id: string;
+  name: string;
+  ip_address: string;
+  gateway: string;
+  mac_address: string;
+}
+
+// Images
+export interface DockerImage {
+  id: string;
+  tags: string[];
+  size: number;
+  created: number;
+  dangling: boolean;
+}
+
+// Volumes
+export interface DockerVolume {
+  name: string;
+  driver: string;
+  mountpoint: string;
+  created: string;
+  in_use: boolean;
+}
+
+// System info
+export interface SystemInfo {
+  docker_version: string;
+  api_version: string;
+  os: string;
+  arch: string;
+  kernel: string;
+  total_memory: number;
+  cpus: number;
+  containers_running: number;
+  containers_stopped: number;
+  images: number;
+}
+
+// Hardware metrics
+export interface DiskInfo {
+  name: string;
+  mount: string;
+  total: number;
+  used: number;
+  pct: number;
+}
+
+export interface HardwareMetrics {
+  mem_used: number;
+  mem_total: number;
+  mem_pct: number;
+  disks: DiskInfo[];
 }

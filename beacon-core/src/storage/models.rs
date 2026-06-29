@@ -24,6 +24,8 @@ pub struct SavedStack {
     pub host_id: String,
     pub name: String,
     pub content: String,
+    pub env_vars: Option<String>,
+    pub webhook_token: Option<String>,
     pub status: String,
     pub created_at: String,
     pub updated_at: String,

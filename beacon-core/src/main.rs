@@ -28,6 +28,7 @@ async fn main() {
 
     let cfg = config::Config::from_env();
     observability::metrics::init();
+    observability::metrics::init_events_counter();
 
     let docker = containers::docker::connect().expect("Failed to connect to Docker daemon");
     let events = Arc::new(observability::websocket::new_channel());
@@ -70,18 +71,49 @@ async fn main() {
         .route("/api/hosts/:id/containers/:cid/raw", get(environments::api::inspect_raw_container))
         .route("/api/hosts/:id/containers/:cid/recreate", post(environments::api::recreate_container))
         .route("/api/hosts/:id/containers/:cid/env", post(environments::api::update_container_env))
+        .route("/api/hosts/:id/containers/:cid/exec", post(environments::api::exec_container))
+        // System info
+        .route("/api/hosts/:id/system", get(environments::api::get_system_info))
+        .route("/api/hosts/:id/hardware", get(environments::api::get_hardware_metrics))
+        // Images
+        .route("/api/hosts/:id/images", get(environments::api::list_images))
+        .route("/api/hosts/:id/images/prune", post(environments::api::prune_images))
+        .route("/api/hosts/:id/images/:image_id", delete(environments::api::delete_image))
+        // Volumes
+        .route("/api/hosts/:id/volumes", get(environments::api::list_volumes))
+        .route("/api/hosts/:id/volumes/prune", post(environments::api::prune_volumes))
+        .route("/api/hosts/:id/volumes/:vol_name", delete(environments::api::delete_volume))
+        // Networks
+        .route("/api/hosts/:id/networks", get(environments::api::list_host_networks))
+        .route("/api/hosts/:id/containers/:cid/networks", get(environments::api::get_container_networks))
+        .route("/api/hosts/:id/containers/:cid/networks/connect", post(environments::api::network_connect))
+        .route("/api/hosts/:id/containers/:cid/networks/disconnect", post(environments::api::network_disconnect))
         .route("/api/hosts/:id/containers/:cid/logs", get(environments::api::container_logs))
         // Per-host stacks
         .route("/api/hosts/:host_id/stacks", get(stacks::api::list).post(stacks::api::create))
         .route("/api/hosts/:host_id/stacks/detected", get(environments::api::list_stacks))
         .route("/api/hosts/:host_id/swarm/services", get(swarm::api::list_services))
         .route("/api/hosts/:host_id/swarm/nodes", get(swarm::api::list_nodes))
+        // Webhook execution endpoints
         .route("/api/webhooks/:host_id/:container_id/recreate", post(webhooks::api::recreate_container))
+        .route("/api/webhooks/:host_id/containers/:name/deploy", post(webhooks::api::deploy_container))
+        .route("/api/webhooks/:host_id/stacks/:stack_id/redeploy", post(webhooks::api::redeploy_stack))
+        .route("/api/webhooks/:host_id/swarm/:service_id/update", post(webhooks::api::update_swarm_service))
+        .route("/api/webhooks/:host_id/k8s/:namespace/:deployment/rollout", post(webhooks::api::k8s_rollout))
+        // Webhook token management (generic: entity_type = container | swarm | k8s)
+        .route("/api/webhooks/:host_id/:entity_type/:entity_key/token",
+            get(webhooks::api::get_token)
+            .post(webhooks::api::set_token)
+            .delete(webhooks::api::delete_token)
+        )
         .route("/api/stacks/:stack_id", get(stacks::api::get).put(stacks::api::update).delete(stacks::api::delete))
         .route("/api/stacks/:stack_id/up", post(stacks::api::up))
         .route("/api/stacks/:stack_id/down", post(stacks::api::down))
+        .route("/api/stacks/:stack_id/token", post(stacks::api::set_token).delete(stacks::api::delete_token))
         // Events (global, from local Docker)
         .route("/api/events", get(containers::api::list_events))
+        // Prometheus proxy
+        .route("/api/prometheus/query", get(observability::prometheus_proxy::query))
         // Kubernetes
         .route("/api/k8s/pods", get(orchestration::api::pods))
         .route("/api/k8s/namespaces", get(orchestration::api::namespaces))

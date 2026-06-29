@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
-  import type { Container, ContainerDetail, ContainerPort } from '../types/containers';
+  import type { Container, ContainerDetail, ContainerNetworkInfo, ContainerPort, HostNetwork } from '../types/containers';
 
   let {
     hostId,
@@ -15,7 +15,7 @@
     onrefresh: () => void;
   } = $props();
 
-  type Tab = 'overview' | 'ports' | 'volumes' | 'env' | 'raw' | 'logs';
+  type Tab = 'overview' | 'ports' | 'volumes' | 'env' | 'networks' | 'raw' | 'logs' | 'terminal';
   let tab = $state<Tab>('overview');
 
   // ── Inspect ───────────────────────────────────────────────────────────────
@@ -122,9 +122,153 @@
     finally { actionBusy = false; }
   }
 
-  onMount(() => loadDetail());
+  // ── Networks ──────────────────────────────────────────────────────────────
+  let containerNetworks  = $state<ContainerNetworkInfo[]>([]);
+  let hostNetworks       = $state<HostNetwork[]>([]);
+  let networksLoading    = $state(false);
+  let networksError      = $state('');
+  let networkBusy        = $state(false);
 
-  const TABS: Tab[] = ['overview', 'ports', 'volumes', 'env', 'raw', 'logs'];
+  async function loadNetworks() {
+    networksLoading = true; networksError = '';
+    try {
+      [containerNetworks, hostNetworks] = await Promise.all([
+        api.getContainerNetworks(hostId, container.id),
+        api.listHostNetworks(hostId),
+      ]);
+    } catch (e: any) { networksError = String(e); }
+    finally { networksLoading = false; }
+  }
+
+  async function doNetworkConnect(networkId: string) {
+    networkBusy = true;
+    try {
+      await api.networkConnect(hostId, container.id, networkId);
+      await loadNetworks(); onrefresh();
+    } catch (e: any) { networksError = e?.response?.data ?? String(e); }
+    finally { networkBusy = false; }
+  }
+
+  async function doNetworkDisconnect(networkId: string) {
+    networkBusy = true;
+    try {
+      await api.networkDisconnect(hostId, container.id, networkId);
+      await loadNetworks(); onrefresh();
+    } catch (e: any) { networksError = e?.response?.data ?? String(e); }
+    finally { networkBusy = false; }
+  }
+
+  let availableNetworks = $derived(
+    hostNetworks.filter(n => !containerNetworks.some(cn => cn.id === n.id || cn.name === n.name))
+  );
+
+  $effect(() => { if (tab === 'networks') loadNetworks(); });
+
+  // ── Exec / terminal ───────────────────────────────────────────────────────
+  let execInput   = $state('');
+  let execOutput  = $state('');
+  let execBusy    = $state(false);
+  let execError   = $state('');
+  let execEl      = $state<HTMLPreElement | null>(null);
+  let execInputEl = $state<HTMLInputElement | null>(null);
+  let execHistory = $state<string[]>([]);
+  let execHistIdx = $state(-1);
+
+  const SHELL_SUGGESTIONS = ['ls -la', 'env', 'ps aux', 'cat /etc/os-release', 'df -h', 'free -m', 'top -bn1', 'netstat -tlnp'];
+
+  async function runExec() {
+    const raw = execInput.trim();
+    if (!raw) return;
+    execHistory = [raw, ...execHistory.filter(h => h !== raw)].slice(0, 50);
+    execHistIdx = -1;
+    execBusy = true; execError = '';
+    try {
+      const cmd = ['/bin/sh', '-c', raw];
+      const out = await api.execContainer(hostId, container.id, cmd);
+      execOutput += `$ ${raw}\n${out || '(no output)\n'}\n`;
+    } catch (e: any) {
+      execOutput += `$ ${raw}\n[error: ${e?.response?.data ?? String(e)}]\n\n`;
+    } finally {
+      execBusy = false;
+      execInput = '';
+      setTimeout(() => execEl?.scrollTo({ top: execEl.scrollHeight }), 30);
+    }
+  }
+
+  function execKey(e: KeyboardEvent) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); runExec(); return; }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      execHistIdx = Math.min(execHistIdx + 1, execHistory.length - 1);
+      if (execHistory[execHistIdx] !== undefined) execInput = execHistory[execHistIdx];
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      execHistIdx = Math.max(execHistIdx - 1, -1);
+      execInput = execHistIdx === -1 ? '' : (execHistory[execHistIdx] ?? '');
+    }
+  }
+
+  $effect(() => {
+    if (tab === 'terminal' && execInputEl) {
+      setTimeout(() => execInputEl?.focus(), 50);
+    }
+  });
+
+  // ── Webhook token ─────────────────────────────────────────────────────────
+  let webhookToken   = $state<string | null>(null);
+  let webhookBusy    = $state(false);
+
+  // Strip leading "/" — Docker container names often start with "/"
+  const containerKey = $derived(container.name.replace(/^\//, ''));
+
+  async function loadWebhookToken() {
+    try {
+      const r = await api.getWebhookToken(hostId, 'container', containerKey);
+      webhookToken = r.token;
+    } catch { webhookToken = null; }
+  }
+
+  async function enableWebhook() {
+    webhookBusy = true;
+    try {
+      const r = await api.generateWebhookToken(hostId, 'container', containerKey);
+      webhookToken = r.token;
+    } catch (e: any) { console.error(e); }
+    finally { webhookBusy = false; }
+  }
+
+  async function rotateWebhook() {
+    if (!confirm('Rotate token? Existing webhook URLs will stop working.')) return;
+    webhookBusy = true;
+    try {
+      const r = await api.generateWebhookToken(hostId, 'container', containerKey);
+      webhookToken = r.token;
+    } catch (e: any) { console.error(e); }
+    finally { webhookBusy = false; }
+  }
+
+  async function disableWebhook() {
+    if (!confirm('Disable this container\'s webhook?')) return;
+    webhookBusy = true;
+    try {
+      await api.deleteWebhookToken(hostId, 'container', containerKey);
+      webhookToken = null;
+    } catch (e: any) { console.error(e); }
+    finally { webhookBusy = false; }
+  }
+
+  function webhookUrl(): string {
+    return `${window.location.origin}/api/webhooks/${hostId}/containers/${containerKey}/deploy?token=${webhookToken}&pull=true`;
+  }
+
+  function copyWebhookUrl() {
+    navigator.clipboard.writeText(webhookUrl());
+  }
+
+  onMount(() => { loadDetail(); loadWebhookToken(); });
+
+  const TABS: Tab[] = ['overview', 'ports', 'volumes', 'env', 'networks', 'raw', 'logs', 'terminal'];
   function tabLabel(t: Tab) { return t === 'raw' ? 'Inspect' : t.charAt(0).toUpperCase() + t.slice(1); }
   function tabBadge(t: Tab) {
     if (!detail) return 0;
@@ -213,37 +357,77 @@
         {/if}
       </div>
 
-    {:else if tab === 'ports' && detail}
-      {#if detail.ports.length === 0}
-        <div class="state-msg">No ports exposed</div>
-      {:else}
-        <table class="detail-table">
-          <thead><tr><th>Container</th><th>Protocol</th><th>Host IP</th><th>Host port</th></tr></thead>
-          <tbody>
-            {#each editedPorts as port, i}
-              <tr>
-                <td class="mono">{port.container_port}</td>
-                <td><span class="proto-tag">{port.protocol}</span></td>
-                <td class="mono muted">{port.host_ip || '0.0.0.0'}</td>
-                <td>
-                  <input class="port-input" type="text" bind:value={editedPorts[i].host_port} placeholder="host port" />
-                </td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-        <div class="recreate-bar">
-          {#if recreateOk}
-            <span class="ok-msg">✓ Container recreated successfully</span>
-          {:else}
-            {#if recreateError}<span class="err-inline">{recreateError}</span>{/if}
-            <button class="btn-primary" onclick={doRecreate} disabled={recreating}>
-              {recreating ? 'Recreating…' : 'Recreate with new ports'}
-            </button>
-          {/if}
+      <!-- Webhook -->
+      <div class="webhook-box">
+        <div class="webhook-hdr">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+          Deploy webhook
         </div>
-        <p class="hint">Recreating stops and replaces the container with the same image but updated port mappings.</p>
-      {/if}
+        {#if webhookToken}
+          <div class="webhook-enabled-row">
+            <span class="webhook-active-badge">active</span>
+            <code class="webhook-url-sm">{webhookUrl().replace(window.location.origin, '')}</code>
+          </div>
+          <div class="webhook-ctrl-row">
+            <button class="wh-btn" onclick={copyWebhookUrl} disabled={webhookBusy}>Copy URL</button>
+            <button class="wh-btn" onclick={rotateWebhook} disabled={webhookBusy}>Rotate</button>
+            <button class="wh-btn wh-btn-danger" onclick={disableWebhook} disabled={webhookBusy}>Disable</button>
+          </div>
+        {:else}
+          <div class="webhook-desc">Enable to get a token-protected URL for CI/CD to pull and redeploy this container.</div>
+          <button class="wh-btn wh-btn-enable" onclick={enableWebhook} disabled={webhookBusy}>Enable webhook</button>
+        {/if}
+      </div>
+
+    {:else if tab === 'ports' && detail}
+      <table class="detail-table">
+        <thead>
+          <tr>
+            <th>Container port</th>
+            <th>Protocol</th>
+            <th>Host port</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each editedPorts as port, i}
+            <tr>
+              <td>
+                <input class="port-input" type="text" bind:value={editedPorts[i].container_port} placeholder="e.g. 80" />
+              </td>
+              <td>
+                <select class="port-select" bind:value={editedPorts[i].protocol}>
+                  <option value="tcp">tcp</option>
+                  <option value="udp">udp</option>
+                </select>
+              </td>
+              <td>
+                <input class="port-input" type="text" bind:value={editedPorts[i].host_port} placeholder="e.g. 8080" />
+              </td>
+              <td>
+                <button class="env-del" onclick={() => { editedPorts = editedPorts.filter((_, idx) => idx !== i); }} title="Remove">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+      <button class="btn-ghost btn-sm" style="margin-bottom:12px" onclick={() => { editedPorts = [...editedPorts, { container_port: '', protocol: 'tcp', host_port: '', host_ip: '0.0.0.0' }]; }}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+        Add port mapping
+      </button>
+      <div class="recreate-bar">
+        {#if recreateOk}
+          <span class="ok-msg">✓ Container recreated successfully</span>
+        {:else}
+          {#if recreateError}<span class="err-inline">{recreateError}</span>{/if}
+          <button class="btn-primary" onclick={doRecreate} disabled={recreating || editedPorts.some(p => !p.container_port || !p.host_port)}>
+            {recreating ? 'Recreating…' : 'Recreate with these ports'}
+          </button>
+        {/if}
+      </div>
+      <p class="hint">Recreating stops and replaces the container with the same image but updated port mappings. You can add, edit, or remove any port binding.</p>
 
     {:else if tab === 'volumes' && detail}
       {#if detail.mounts.length === 0}
@@ -304,6 +488,54 @@
         <p class="hint">Saving recreates the container with the updated environment variables and starts it.</p>
       {/if}
 
+    {:else if tab === 'networks'}
+      {#if networksLoading}
+        <div class="state-msg">Loading networks…</div>
+      {:else}
+        {#if networksError}<div class="err-box" style="margin-bottom:12px">{networksError}</div>{/if}
+        <div class="net-section-label">Connected networks</div>
+        {#if containerNetworks.length === 0}
+          <div class="state-msg" style="padding:20px 0">No networks connected</div>
+        {:else}
+          <div class="net-list">
+            {#each containerNetworks as net (net.id)}
+              <div class="net-row">
+                <div class="net-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2z"/><path d="M2 12h20M12 2c-2.5 3-4 6.3-4 10s1.5 7 4 10M12 2c2.5 3 4 6.3 4 10s-1.5 7-4 10"/></svg>
+                </div>
+                <div class="net-info">
+                  <div class="net-name">{net.name}</div>
+                  {#if net.ip_address}<div class="net-meta">{net.ip_address}{net.gateway ? ` · gw ${net.gateway}` : ''}</div>{/if}
+                </div>
+                <button class="net-remove" onclick={() => doNetworkDisconnect(net.id || net.name)} disabled={networkBusy} title="Disconnect">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+              </div>
+            {/each}
+          </div>
+        {/if}
+
+        {#if availableNetworks.length > 0}
+          <div class="net-section-label" style="margin-top:20px">Available networks</div>
+          <div class="net-list">
+            {#each availableNetworks as net (net.id)}
+              <div class="net-row">
+                <div class="net-icon net-icon-mist">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2z"/><path d="M2 12h20M12 2c-2.5 3-4 6.3-4 10s1.5 7 4 10M12 2c2.5 3 4 6.3 4 10s-1.5 7-4 10"/></svg>
+                </div>
+                <div class="net-info">
+                  <div class="net-name">{net.name}</div>
+                  <div class="net-meta">{net.driver} · {net.scope}{net.internal ? ' · internal' : ''}</div>
+                </div>
+                <button class="btn-ghost btn-sm" onclick={() => doNetworkConnect(net.id)} disabled={networkBusy}>
+                  Connect
+                </button>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      {/if}
+
     {:else if tab === 'raw'}
       {#if rawLoading}
         <div class="state-msg">Loading raw inspect…</div>
@@ -330,6 +562,48 @@
         </button>
       </div>
       <pre class="terminal" bind:this={logEl}>{#if logsLoading}<span class="muted">Loading…</span>{:else if !logs.trim()}<span class="muted">No output</span>{:else}{logs}{/if}</pre>
+
+    {:else if tab === 'terminal'}
+      {#if container.state !== 'running'}
+        <div class="state-msg">Container must be running to exec commands</div>
+      {:else}
+        <div class="exec-header">
+          <span class="exec-host-label">{container.name}</span>
+          <div class="exec-suggestions-inline">
+            {#each SHELL_SUGGESTIONS as s}
+              <button class="suggest-pill" onclick={() => { execInput = s; execInputEl?.focus(); }}>
+                {s}
+              </button>
+            {/each}
+          </div>
+          {#if execOutput}
+            <button class="btn-ghost btn-sm" onclick={() => { execOutput = ''; execHistIdx = -1; }}>Clear</button>
+          {/if}
+        </div>
+        <pre class="terminal exec-out" bind:this={execEl}>{execOutput || ''}{#if !execOutput}<span class="muted">Type a command below and press Enter…{'\n\n'}↑/↓ to navigate history</span>{/if}</pre>
+        <div class="exec-bar">
+          <span class="exec-prompt">$</span>
+          <input
+            class="exec-input"
+            type="text"
+            placeholder="Enter command…"
+            bind:value={execInput}
+            bind:this={execInputEl}
+            onkeydown={execKey}
+            disabled={execBusy}
+            autocomplete="off"
+            spellcheck={false}
+          />
+          <button class="exec-run-btn" onclick={runExec} disabled={execBusy || !execInput.trim()}>
+            {#if execBusy}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" class="spin"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+            {:else}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 4l14 8-14 8V4z"/></svg>
+            {/if}
+          </button>
+        </div>
+        <div class="exec-hint">↑↓ history · Enter to run · commands run via <code>/bin/sh -c</code></div>
+      {/if}
     {/if}
   </div>
 </div>
@@ -340,7 +614,7 @@
     z-index: 50; backdrop-filter: blur(1px);
   }
   .drawer {
-    position: fixed; top: 0; right: 0; bottom: 0; width: 580px; max-width: 95vw;
+    position: fixed; top: 0; right: 0; bottom: 0; width: 780px; max-width: 96vw;
     background: var(--surface); border-left: 1px solid var(--border);
     box-shadow: var(--shadow-lg); z-index: 51;
     display: flex; flex-direction: column; overflow: hidden;
@@ -421,6 +695,39 @@
   .muted { color: var(--mist-2); }
   .wrap { word-break: break-all; }
 
+  /* Webhook box */
+  .webhook-box {
+    margin-top: 18px; padding: 14px 16px; background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+  }
+  .webhook-hdr {
+    display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 700;
+    color: var(--ink); margin-bottom: 6px;
+  }
+  .webhook-hdr svg { width: 15px; height: 15px; color: var(--accent); }
+  .webhook-desc { font-size: 12px; color: var(--mist); margin-bottom: 10px; }
+  .webhook-enabled-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+  .webhook-active-badge {
+    font-size: 10px; font-weight: 800; text-transform: uppercase; background: var(--green-tint);
+    color: var(--green); padding: 2px 7px; border-radius: 20px; flex-shrink: 0;
+  }
+  .webhook-url-sm {
+    font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: var(--mist);
+    background: var(--surface); padding: 3px 8px; border-radius: 4px;
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+  }
+  .webhook-ctrl-row { display: flex; gap: 6px; margin-top: 6px; }
+  .wh-btn {
+    padding: 4px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border);
+    background: var(--surface); color: var(--ink); font-size: 11.5px; font-weight: 600;
+    cursor: pointer; transition: all .12s;
+  }
+  .wh-btn:hover:not(:disabled) { background: var(--surface-2); border-color: var(--border-strong); }
+  .wh-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .wh-btn-danger:hover:not(:disabled) { background: var(--red-tint); color: var(--red); border-color: var(--red); }
+  .wh-btn-enable { color: var(--accent-ink); border-color: var(--accent); background: var(--accent-tint); }
+  .wh-btn-enable:hover:not(:disabled) { background: var(--accent); color: #fff; }
+
   /* Detail table */
   .detail-table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
   .detail-table th {
@@ -443,6 +750,11 @@
     color: var(--ink); background: var(--surface-2); outline: none; transition: border-color .15s;
   }
   .port-input:focus { border-color: var(--accent); background: var(--surface); }
+  .port-select {
+    padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+    font-size: 12.5px; font-family: 'JetBrains Mono', monospace;
+    color: var(--ink); background: var(--surface-2); outline: none;
+  }
 
   /* Recreate */
   .recreate-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
@@ -516,4 +828,87 @@
   .terminal .muted { color: #5F6580; }
   .terminal::-webkit-scrollbar { width: 5px; }
   .terminal::-webkit-scrollbar-thumb { background: #2D3040; border-radius: 4px; }
+
+  /* Networks tab */
+  .net-section-label {
+    font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--mist-2); margin-bottom: 8px;
+  }
+  .net-list { display: flex; flex-direction: column; gap: 6px; }
+  .net-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 14px; border-radius: var(--radius-sm);
+    background: var(--surface-2); border: 1px solid var(--border);
+  }
+  .net-icon {
+    width: 32px; height: 32px; border-radius: 8px; background: var(--accent-tint);
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .net-icon svg { width: 14px; height: 14px; color: var(--accent); }
+  .net-icon-mist { background: var(--surface); }
+  .net-icon-mist svg { color: var(--mist-2); }
+  .net-info { flex: 1; min-width: 0; }
+  .net-name { font-weight: 650; font-size: 13px; color: var(--ink); }
+  .net-meta { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--mist-2); margin-top: 2px; }
+  .net-remove {
+    width: 28px; height: 28px; border-radius: 6px; border: none;
+    background: transparent; color: var(--mist-2); display: flex; align-items: center;
+    justify-content: center; cursor: pointer; transition: all .12s; flex-shrink: 0;
+  }
+  .net-remove:hover:not(:disabled) { background: var(--red-tint); color: var(--red); }
+  .net-remove:disabled { opacity: .35; cursor: not-allowed; }
+  .net-remove svg { width: 13px; height: 13px; }
+
+  /* Exec terminal */
+  .exec-header {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+  .exec-host-label {
+    font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--green);
+    font-weight: 600; padding: 2px 8px; background: rgba(28,154,99,.12); border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .exec-suggestions-inline {
+    display: flex; flex-wrap: wrap; gap: 5px; flex: 1;
+  }
+  .suggest-pill {
+    padding: 2px 9px; border-radius: 20px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--mist); font-size: 11px;
+    font-family: 'JetBrains Mono', monospace; cursor: pointer; transition: all .12s;
+  }
+  .suggest-pill:hover { background: var(--accent-tint); color: var(--accent-ink); border-color: transparent; }
+  .exec-out { flex: 1; min-height: 300px; white-space: pre-wrap; }
+  .exec-bar {
+    display: flex; align-items: center; gap: 0; margin-top: 10px;
+    background: #15171F; border-radius: var(--radius-sm);
+    border: 1px solid #2D3040;
+    padding: 0; flex-shrink: 0; overflow: hidden;
+  }
+  .exec-prompt {
+    font-family: 'JetBrains Mono', monospace; font-size: 14px; color: var(--green);
+    font-weight: 700; padding: 11px 10px 11px 16px; flex-shrink: 0; user-select: none;
+  }
+  .exec-input {
+    flex: 1; background: transparent; border: none; outline: none;
+    font-family: 'JetBrains Mono', monospace; font-size: 13.5px; color: #C7CBDA;
+    caret-color: var(--green); padding: 11px 8px;
+  }
+  .exec-input::placeholder { color: #3E4460; }
+  .exec-run-btn {
+    width: 44px; height: 44px; border: none; border-left: 1px solid #2D3040;
+    background: transparent; color: #5A6180; display: flex; align-items: center;
+    justify-content: center; cursor: pointer; flex-shrink: 0; transition: all .15s;
+  }
+  .exec-run-btn:hover:not(:disabled) { background: rgba(74,95,232,.18); color: #8090F0; }
+  .exec-run-btn:disabled { opacity: .3; cursor: not-allowed; }
+  .exec-run-btn svg { width: 14px; height: 14px; }
+  .exec-hint {
+    font-size: 11.5px; color: var(--mist-2); margin-top: 8px; flex-shrink: 0;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .exec-hint :global(code) { color: var(--mist); }
+  .spin { animation: spin .7s linear infinite; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  .hint :global(code) { font-family: 'JetBrains Mono', monospace; font-size: 11px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
 </style>

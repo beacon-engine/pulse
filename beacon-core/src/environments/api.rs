@@ -41,6 +41,16 @@ pub struct EnvBody {
     pub env: Vec<String>,
 }
 
+#[derive(Deserialize)]
+pub struct ExecBody {
+    pub cmd: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub struct NetworkBody {
+    pub network_id: String,
+}
+
 // ── Host CRUD ─────────────────────────────────────────────────────────────────
 
 pub async fn list(
@@ -179,6 +189,153 @@ pub async fn update_container_env(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(serde_json::json!({ "id": new_id })))
+}
+
+pub async fn exec_container(
+    State(state): State<AppState>,
+    Path((env_id, container_id)): Path<(String, String)>,
+    Json(body): Json<ExecBody>,
+) -> Result<String, (StatusCode, String)> {
+    let d = get_docker(&state, &env_id).await?;
+    docker::exec_command(&d, &container_id, body.cmd)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+// ── System / Images / Volumes ─────────────────────────────────────────────────
+
+pub async fn get_system_info(
+    State(state): State<AppState>,
+    Path(env_id): Path<String>,
+) -> Result<Json<docker::SystemInfo>, (StatusCode, String)> {
+    let d = get_docker(&state, &env_id).await?;
+    docker::system_info(&d)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+pub async fn get_hardware_metrics(
+    State(state): State<AppState>,
+    Path(env_id): Path<String>,
+) -> Result<Json<docker::HardwareMetrics>, (StatusCode, String)> {
+    // Verify host exists but hardware metrics are from the local machine
+    get_docker(&state, &env_id).await?;
+    Ok(Json(docker::hardware_metrics()))
+}
+
+pub async fn list_images(
+    State(state): State<AppState>,
+    Path(env_id): Path<String>,
+) -> Result<Json<Vec<docker::ImageInfo>>, (StatusCode, String)> {
+    let d = get_docker(&state, &env_id).await?;
+    docker::list_images(&d)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+pub async fn delete_image(
+    State(state): State<AppState>,
+    Path((env_id, image_id)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let d = get_docker(&state, &env_id).await?;
+    docker::delete_image(&d, &image_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn prune_images(
+    State(state): State<AppState>,
+    Path(env_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let d = get_docker(&state, &env_id).await?;
+    let reclaimed = docker::prune_images(&d)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "reclaimed": reclaimed })))
+}
+
+pub async fn list_volumes(
+    State(state): State<AppState>,
+    Path(env_id): Path<String>,
+) -> Result<Json<Vec<docker::VolumeInfo>>, (StatusCode, String)> {
+    let d = get_docker(&state, &env_id).await?;
+    docker::list_volumes(&d)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+pub async fn delete_volume(
+    State(state): State<AppState>,
+    Path((env_id, vol_name)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let d = get_docker(&state, &env_id).await?;
+    docker::delete_volume(&d, &vol_name)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn prune_volumes(
+    State(state): State<AppState>,
+    Path(env_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let d = get_docker(&state, &env_id).await?;
+    let reclaimed = docker::prune_volumes(&d)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "reclaimed": reclaimed })))
+}
+
+// ── Network operations ────────────────────────────────────────────────────────
+
+pub async fn list_host_networks(
+    State(state): State<AppState>,
+    Path(env_id): Path<String>,
+) -> Result<Json<Vec<docker::HostNetwork>>, (StatusCode, String)> {
+    let d = get_docker(&state, &env_id).await?;
+    docker::list_host_networks(&d)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+pub async fn get_container_networks(
+    State(state): State<AppState>,
+    Path((env_id, container_id)): Path<(String, String)>,
+) -> Result<Json<Vec<docker::ContainerNetworkInfo>>, (StatusCode, String)> {
+    let d = get_docker(&state, &env_id).await?;
+    docker::get_container_networks(&d, &container_id)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+pub async fn network_connect(
+    State(state): State<AppState>,
+    Path((env_id, container_id)): Path<(String, String)>,
+    Json(body): Json<NetworkBody>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let d = get_docker(&state, &env_id).await?;
+    docker::connect_to_network(&d, &body.network_id, &container_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn network_disconnect(
+    State(state): State<AppState>,
+    Path((env_id, container_id)): Path<(String, String)>,
+    Json(body): Json<NetworkBody>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let d = get_docker(&state, &env_id).await?;
+    docker::disconnect_from_network(&d, &body.network_id, &container_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn container_logs(

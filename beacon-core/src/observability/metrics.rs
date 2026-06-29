@@ -47,6 +47,25 @@ pub fn set_container_count(n: i64) {
     METRICS.get().expect("metrics not initialized").containers_total.set(n);
 }
 
+static EVENTS: OnceLock<prometheus::CounterVec> = OnceLock::new();
+
+pub fn init_events_counter() {
+    EVENTS.get_or_init(|| {
+        register_counter_vec!(
+            "beacon_container_events_total",
+            "Container lifecycle events recorded by Beacon",
+            &["event"]
+        )
+        .expect("Failed to register beacon_container_events_total")
+    });
+}
+
+pub fn record_event(event: &str) {
+    if let Some(c) = EVENTS.get() {
+        c.with_label_values(&[event]).inc();
+    }
+}
+
 pub fn render() -> String {
     if let Some(m) = METRICS.get() {
         if let Some(t) = START_TIME.get() {

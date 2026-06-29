@@ -17,6 +17,23 @@ fn project_dir(stack: &SavedStack) -> PathBuf {
 fn write_compose_file(stack: &SavedStack) -> Result<PathBuf, String> {
     let dir = project_dir(stack);
     fs::create_dir_all(&dir).map_err(|e| format!("create stack dir: {e}"))?;
+
+    // Write .env so docker compose can substitute ${VAR} references
+    if let Some(env_json) = &stack.env_vars {
+        if let Ok(vars) = serde_json::from_str::<Vec<serde_json::Value>>(env_json) {
+            let content: String = vars
+                .iter()
+                .filter_map(|v| {
+                    let k = v["key"].as_str().filter(|s| !s.is_empty())?;
+                    let val = v["value"].as_str().unwrap_or("");
+                    Some(format!("{k}={val}\n"))
+                })
+                .collect();
+            fs::write(dir.join(".env"), content)
+                .map_err(|e| format!("write .env file: {e}"))?;
+        }
+    }
+
     let path = dir.join("docker-compose.yml");
     fs::write(&path, &stack.content).map_err(|e| format!("write compose file: {e}"))?;
     Ok(path)

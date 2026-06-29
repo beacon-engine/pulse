@@ -4,6 +4,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::{stacks::compose, state::AppState};
 use crate::storage::models::SavedStack;
@@ -14,9 +15,16 @@ pub struct CreateStackBody {
     pub content: String,
 }
 
+#[derive(Deserialize, Serialize, Clone)]
+pub struct EnvVar {
+    pub key: String,
+    pub value: String,
+}
+
 #[derive(Deserialize)]
 pub struct UpdateStackBody {
     pub content: String,
+    pub env_vars: Option<Vec<EnvVar>>,
 }
 
 #[derive(Serialize)]
@@ -24,6 +32,11 @@ pub struct StackOpResponse {
     pub id: String,
     pub status: String,
     pub output: String,
+}
+
+#[derive(Serialize)]
+pub struct TokenResponse {
+    pub token: String,
 }
 
 pub async fn list(
@@ -77,9 +90,14 @@ pub async fn update(
     Path(id): Path<String>,
     Json(body): Json<UpdateStackBody>,
 ) -> Result<Json<SavedStack>, (StatusCode, String)> {
+    let env_json = body
+        .env_vars
+        .as_ref()
+        .map(|vars| serde_json::to_string(vars).unwrap_or_default());
+
     state
         .db
-        .update_stack(&id, &body.content)
+        .update_stack(&id, &body.content, env_json.as_deref())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -96,7 +114,6 @@ pub async fn delete(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    // Best-effort compose down before deleting the record
     if let Some(stack) = state
         .db
         .get_stack(&id)
@@ -155,9 +172,9 @@ pub async fn down(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, format!("stack {id} not found")))?;
 
-    let output = compose::down(&state, &stack).await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, e)
-    })?;
+    let output = compose::down(&state, &stack)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     state
         .db
@@ -170,4 +187,31 @@ pub async fn down(
         status: "created".into(),
         output,
     }))
+}
+
+// ── Webhook token management ──────────────────────────────────────────────────
+
+pub async fn set_token(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<TokenResponse>, (StatusCode, String)> {
+    let token = Uuid::new_v4().to_string();
+    state
+        .db
+        .set_stack_webhook_token(&id, Some(&token))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(TokenResponse { token }))
+}
+
+pub async fn delete_token(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .db
+        .set_stack_webhook_token(&id, None)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
 }

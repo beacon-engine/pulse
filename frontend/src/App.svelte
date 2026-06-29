@@ -11,6 +11,8 @@
   import StacksPage from './pages/StacksPage.svelte';
   import EventsPage from './pages/EventsPage.svelte';
   import KubernetesPage from './pages/KubernetesPage.svelte';
+  import MetricsPage from './pages/MetricsPage.svelte';
+  import ResourcesPage from './pages/ResourcesPage.svelte';
   import SwarmPage from './pages/SwarmPage.svelte';
   import type { Container, ContainerEvent, K8sNamespace, K8sPod, SavedStack, Stack, SwarmNode, SwarmService } from './types/containers';
   import type { Environment } from './types/environments';
@@ -30,6 +32,8 @@
     { id: 'stacks',     label: 'Stacks',     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.4"/><rect x="14" y="3" width="7" height="7" rx="1.4"/><rect x="3" y="14" width="7" height="7" rx="1.4"/><rect x="14" y="14" width="7" height="7" rx="1.4"/></svg>` },
     { id: 'swarm',      label: 'Swarm',      icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="5" r="2"/><circle cx="19" cy="9" r="2"/><circle cx="19" cy="15" r="2"/><circle cx="12" cy="19" r="2"/><circle cx="5" cy="15" r="2"/><circle cx="5" cy="9" r="2"/><path d="M7 9l4-2.5M13 9l4 2.5M17 15l-4 2.5M11 15l-4-2.5"/></svg>` },
     { id: 'events',     label: 'Events',     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>` },
+    { id: 'metrics',    label: 'Metrics',    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>` },
+    { id: 'resources',  label: 'Resources',  icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>` },
     { id: 'kubernetes', label: 'Kubernetes', icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2L20 6.5V17.5L12 22L4 17.5V6.5L12 2Z"/><path d="M12 22V12M20 6.5L12 12M4 6.5L12 12"/></svg>` },
   ];
 
@@ -55,7 +59,6 @@
   let k8sError      = $state('');
   let swarmError    = $state('');
   let lastUpdated   = $state('');
-  let selectedContainer = $state<Container | null>(null);
 
   let running = $derived(containers.filter(c => c.state === 'running').length);
 
@@ -73,7 +76,7 @@
 
   function openCmdk()   { cmdkOpen = true; cmdkQuery = ''; cmdkSel = 0; }
   function closeCmdk()  { cmdkOpen = false; }
-  function cmdkSelect(c: Container) { selectedContainer = c; navigate('containers'); closeCmdk(); }
+  function cmdkSelect(c: Container) { state.selectedContainer = c; navigate('containers'); closeCmdk(); }
 
   // ── Toasts ────────────────────────────────────────────────────────────────
   type Toast = { id: number; msg: string; kind: 'ok' | 'warn' | 'err' };
@@ -136,7 +139,7 @@
   async function switchHost(id: string) {
     if (id === activeHostId) return;
     activeHostId = id; loading = true;
-    containers = []; stacks = []; selectedContainer = null;
+    containers = []; stacks = []; state.selectedContainer = null;
     await refresh();
   }
 
@@ -169,7 +172,7 @@
 
   // ── Shared state for pages ────────────────────────────────────────────────
   let state = $state<AppState>({
-    hosts, activeHostId, activeHost, selectedContainer,
+    hosts, activeHostId, activeHost, selectedContainer: null,
     containers, stacks, savedStacks, events,
     pods, namespaces, swarmServices, swarmNodes,
     loading, k8sLoading, swarmLoading,
@@ -184,7 +187,6 @@
     state.hosts = hosts;
     state.activeHostId = activeHostId;
     state.activeHost = activeHost;
-    state.selectedContainer = selectedContainer;
     state.containers = containers;
     state.stacks = stacks;
     state.savedStacks = savedStacks;
@@ -235,11 +237,11 @@
 </script>
 
 <!-- ── Drawer ───────────────────────────────────────────────────────────── -->
-{#if selectedContainer && activeHostId !== null}
+{#if state.selectedContainer && state.activeHostId !== null}
   <ContainerDrawer
-    hostId={activeHostId}
-    container={selectedContainer}
-    onclose={() => (selectedContainer = null)}
+    hostId={state.activeHostId}
+    container={state.selectedContainer}
+    onclose={() => (state.selectedContainer = null)}
     onrefresh={refresh}
   />
 {/if}
@@ -379,6 +381,10 @@
         <StacksPage />
       {:else if route === 'events'}
         <EventsPage />
+      {:else if route === 'metrics'}
+        <MetricsPage />
+      {:else if route === 'resources'}
+        <ResourcesPage />
       {:else if route === 'swarm'}
         <SwarmPage />
       {:else if route === 'kubernetes'}

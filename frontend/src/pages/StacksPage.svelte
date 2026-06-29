@@ -1,36 +1,49 @@
 <script lang="ts">
   import { api } from '../lib/api';
   import { getAppState } from '../lib/appContext';
-  import type { SavedStack } from '../types/containers';
+  import type { EnvVar, SavedStack } from '../types/containers';
 
   const app = getAppState();
 
+  // ── Editor state ──────────────────────────────────────────────────────────
   let showStackEditor = $state(false);
-  let editingStackId  = $state<string | null>(null);
+  let editingStack    = $state<SavedStack | null>(null);
   let stackName       = $state('');
   let stackContent    = $state('');
+  let envVars         = $state<EnvVar[]>([]);
   let stackOpBusy     = $state(false);
   let stackOpError    = $state('');
 
   function openStackEditor(stack?: SavedStack) {
-    editingStackId = stack ? stack.id : null;
+    editingStack   = stack ?? null;
     stackName      = stack ? stack.name : '';
     stackContent   = stack ? stack.content : '';
+    envVars        = stack?.env_vars ? JSON.parse(stack.env_vars) : [];
     stackOpError   = '';
     showStackEditor = true;
   }
 
   function closeStackEditor() {
     showStackEditor = false;
-    editingStackId = null;
+    editingStack    = null;
+  }
+
+  function addEnvRow() { envVars = [...envVars, { key: '', value: '' }]; }
+  function removeEnvRow(i: number) { envVars = envVars.filter((_, idx) => idx !== i); }
+  function updateEnvKey(i: number, v: string) {
+    envVars = envVars.map((r, idx) => idx === i ? { ...r, key: v } : r);
+  }
+  function updateEnvVal(i: number, v: string) {
+    envVars = envVars.map((r, idx) => idx === i ? { ...r, value: v } : r);
   }
 
   async function saveStack() {
     if (!app.activeHostId) return;
     stackOpBusy = true; stackOpError = '';
     try {
-      if (editingStackId) {
-        await api.updateSavedStack(editingStackId, stackContent);
+      const validEnvVars = envVars.filter(e => e.key.trim());
+      if (editingStack) {
+        await api.updateSavedStack(editingStack.id, stackContent, validEnvVars);
         app.toast('Stack updated');
       } else {
         await api.createSavedStack(app.activeHostId, stackName, stackContent);
@@ -42,6 +55,7 @@
     finally { stackOpBusy = false; }
   }
 
+  // ── Stack actions ─────────────────────────────────────────────────────────
   async function runStackUp(id: string) {
     stackOpBusy = true;
     try {
@@ -69,6 +83,43 @@
       app.toast('Stack deleted', 'warn');
       await app.refresh();
     } catch (e: any) { app.toast(e?.response?.data ?? String(e), 'err'); }
+  }
+
+  // ── Webhook token management ───────────────────────────────────────────────
+  async function enableWebhook(s: SavedStack) {
+    try {
+      await api.generateStackToken(s.id);
+      app.toast('Webhook enabled');
+      await app.refresh();
+    } catch (e: any) { app.toast(String(e), 'err'); }
+  }
+
+  async function rotateToken(s: SavedStack) {
+    if (!confirm('Rotate the webhook token? Existing URLs will stop working.')) return;
+    try {
+      await api.generateStackToken(s.id);
+      app.toast('Token rotated');
+      await app.refresh();
+    } catch (e: any) { app.toast(String(e), 'err'); }
+  }
+
+  async function disableWebhook(s: SavedStack) {
+    if (!confirm('Disable this stack\'s webhook?')) return;
+    try {
+      await api.deleteStackToken(s.id);
+      app.toast('Webhook disabled', 'warn');
+      await app.refresh();
+    } catch (e: any) { app.toast(String(e), 'err'); }
+  }
+
+  function webhookUrl(s: SavedStack): string {
+    if (!s.webhook_token) return '';
+    return `${window.location.origin}/api/webhooks/${s.host_id}/stacks/${s.id}/redeploy?token=${s.webhook_token}`;
+  }
+
+  function copyUrl(s: SavedStack) {
+    navigator.clipboard.writeText(webhookUrl(s));
+    app.toast('Webhook URL copied');
   }
 </script>
 
@@ -98,9 +149,12 @@
       {#each app.savedStacks as s (s.id)}
         <div class="saved-stack-card">
           <div class="saved-stack-hdr">
-            <div>
+            <div class="stack-title-row">
               <span class="saved-stack-name">{s.name}</span>
               <span class="saved-stack-status pill {s.status === 'running' ? 'pill-green' : 'pill-mist'}">{s.status}</span>
+              {#if s.env_vars && JSON.parse(s.env_vars).length > 0}
+                <span class="pill pill-blue" title="Has environment variables">{JSON.parse(s.env_vars).length} env</span>
+              {/if}
             </div>
             <div class="saved-stack-actions">
               <button class="btn-ghost btn-sm" onclick={() => runStackUp(s.id)} disabled={stackOpBusy}>Start</button>
@@ -109,6 +163,30 @@
               <button class="btn-ghost btn-sm btn-danger" onclick={() => removeSavedStack(s.id)}>Delete</button>
             </div>
           </div>
+
+          <!-- Webhook section -->
+          <div class="webhook-row">
+            {#if s.webhook_token}
+              <div class="webhook-enabled">
+                <span class="webhook-label">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                  Webhook active
+                </span>
+                <code class="webhook-url-preview">{webhookUrl(s).replace(window.location.origin, '')}</code>
+                <div class="webhook-actions">
+                  <button class="btn-ghost btn-xs" onclick={() => copyUrl(s)} title="Copy webhook URL">Copy URL</button>
+                  <button class="btn-ghost btn-xs" onclick={() => rotateToken(s)} title="Rotate token">Rotate</button>
+                  <button class="btn-ghost btn-xs btn-danger" onclick={() => disableWebhook(s)} title="Disable webhook">Disable</button>
+                </div>
+              </div>
+            {:else}
+              <button class="btn-ghost btn-xs webhook-enable-btn" onclick={() => enableWebhook(s)}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                Enable webhook
+              </button>
+            {/if}
+          </div>
+
           <div class="saved-stack-meta">Updated {new Date(s.updated_at).toLocaleString()}</div>
         </div>
       {/each}
@@ -149,24 +227,50 @@
   <div class="modal-backdrop" onclick={closeStackEditor}></div>
   <div class="modal" role="dialog">
     <div class="modal-h">
-      <h3>{editingStackId ? 'Edit stack' : 'New stack'}</h3>
+      <h3>{editingStack ? `Edit — ${editingStack.name}` : 'New stack'}</h3>
       <button class="close-x" onclick={closeStackEditor}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg>
       </button>
     </div>
     <div class="modal-body">
-      {#if !editingStackId}
+      {#if !editingStack}
         <label class="field-label">Stack name</label>
         <input class="text-input" bind:value={stackName} placeholder="e.g. monitoring" />
       {/if}
+
       <label class="field-label">Compose YAML</label>
-      <textarea class="code-textarea" bind:value={stackContent} rows="14" placeholder="services:\n  web:\n    image: nginx:latest\n    ports:\n      - 8080:80"></textarea>
+      <textarea class="code-textarea" bind:value={stackContent} rows="12" placeholder="services:&#10;  web:&#10;    image: nginx:latest&#10;    ports:&#10;      - 8080:80"></textarea>
+
+      <!-- Env vars editor -->
+      <div class="env-section">
+        <div class="env-header">
+          <span class="field-label">Environment variables</span>
+          <button class="btn-ghost btn-xs" onclick={addEnvRow}>+ Add</button>
+        </div>
+        {#if envVars.length === 0}
+          <p class="env-hint">Variables declared here are written to a <code>.env</code> file and available as <code>{'${VAR}'}</code> in the YAML above.</p>
+        {:else}
+          <div class="env-table">
+            {#each envVars as row, i (i)}
+              <div class="env-row">
+                <input class="env-input key-input" value={row.key}   oninput={(e) => updateEnvKey(i, (e.target as HTMLInputElement).value)} placeholder="KEY" />
+                <span class="env-eq">=</span>
+                <input class="env-input val-input" value={row.value} oninput={(e) => updateEnvVal(i, (e.target as HTMLInputElement).value)} placeholder="value" />
+                <button class="env-del" onclick={() => removeEnvRow(i)} title="Remove">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg>
+                </button>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
       {#if stackOpError}<div class="err-box">{stackOpError}</div>{/if}
     </div>
     <div class="modal-ft">
       <button class="btn-ghost" onclick={closeStackEditor}>Cancel</button>
-      <button class="btn-primary" onclick={saveStack} disabled={stackOpBusy || (!editingStackId && !stackName.trim())}>
-        {stackOpBusy ? 'Saving…' : editingStackId ? 'Update' : 'Create'}
+      <button class="btn-primary" onclick={saveStack} disabled={stackOpBusy || (!editingStack && !stackName.trim())}>
+        {stackOpBusy ? 'Saving…' : editingStack ? 'Update' : 'Create'}
       </button>
     </div>
   </div>
@@ -190,10 +294,27 @@
   .saved-stack-list { display: flex; flex-direction: column; gap: 10px; }
   .saved-stack-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 14px 16px; }
   .saved-stack-hdr { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-  .saved-stack-name { font-weight: 700; font-size: 14px; margin-right: 8px; }
+  .stack-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .saved-stack-name { font-weight: 700; font-size: 14px; }
   .saved-stack-status { font-size: 11px; }
-  .saved-stack-actions { display: flex; gap: 6px; }
-  .saved-stack-meta { font-size: 11.5px; color: var(--mist-2); margin-top: 8px; }
+  .saved-stack-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .saved-stack-meta { font-size: 11.5px; color: var(--mist-2); margin-top: 10px; }
+
+  /* Webhook row */
+  .webhook-row { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .webhook-enable-btn { color: var(--mist); font-size: 11.5px; }
+  .webhook-enabled { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .webhook-label {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11.5px; font-weight: 700; color: var(--green); white-space: nowrap;
+  }
+  .webhook-url-preview {
+    font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: var(--mist);
+    background: var(--surface-2); padding: 3px 8px; border-radius: 4px;
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px;
+  }
+  .webhook-actions { display: flex; gap: 6px; }
+
   .stack-grid { display: flex; flex-direction: column; gap: 14px; }
   .stack-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); overflow: hidden; }
   .stack-hdr { display: flex; justify-content: space-between; align-items: center; padding: 12px 18px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
@@ -210,6 +331,7 @@
   .svc-img { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--mist); flex: 1; }
   .svc-stat { font-size: 12px; flex-shrink: 0; }
 
+  /* Buttons */
   .btn-ghost {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 7px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border);
@@ -219,6 +341,7 @@
   .btn-ghost:hover:not(:disabled) { background: var(--surface); border-color: var(--border-strong); }
   .btn-ghost:disabled { opacity: .4; cursor: not-allowed; }
   .btn-ghost.btn-sm { padding: 5px 10px; font-size: 12px; }
+  .btn-ghost.btn-xs { padding: 3px 8px; font-size: 11.5px; }
   .btn-danger:hover:not(:disabled) { background: var(--red-tint); color: var(--red); border-color: var(--red); }
   .btn-primary {
     display: inline-flex; align-items: center; gap: 6px;
@@ -228,12 +351,13 @@
   }
   .btn-primary:hover:not(:disabled) { filter: brightness(1.07); }
   .btn-primary:disabled { opacity: .45; cursor: not-allowed; }
-  .btn-primary svg, .btn-ghost svg { width: 13px; height: 13px; }
+  .btn-primary :global(svg), .btn-ghost :global(svg) { width: 13px; height: 13px; }
 
+  /* Modal */
   .modal-backdrop { position: fixed; inset: 0; background: rgba(20,22,40,.45); z-index: 200; backdrop-filter: blur(2px); }
   .modal {
     position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-    width: 620px; max-width: 92vw; max-height: 90vh; background: var(--surface);
+    width: 680px; max-width: 92vw; max-height: 90vh; background: var(--surface);
     border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
     z-index: 201; display: flex; flex-direction: column; overflow: hidden;
   }
@@ -250,7 +374,7 @@
   .code-textarea {
     font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.5;
     padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm);
-    background: var(--surface-2); color: var(--ink); resize: vertical; min-height: 260px;
+    background: var(--surface-2); color: var(--ink); resize: vertical; min-height: 220px;
     outline: none;
   }
   .code-textarea:focus { border-color: var(--accent); background: var(--surface); }
@@ -260,10 +384,37 @@
     display: flex; align-items: center; justify-content: center; cursor: pointer;
   }
   .close-x:hover { color: var(--ink); }
-  .close-x svg { width: 16px; height: 16px; }
+  .close-x :global(svg) { width: 16px; height: 16px; }
 
+  /* Env vars editor */
+  .env-section { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+  .env-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+  .env-hint { font-size: 12px; color: var(--mist-2); margin: 10px 12px; }
+  .env-hint code { background: var(--surface-2); padding: 1px 4px; border-radius: 3px; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+  .env-table { display: flex; flex-direction: column; }
+  .env-row { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+  .env-row:last-child { border-bottom: none; }
+  .env-input {
+    padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px;
+    background: var(--surface); color: var(--ink); font-family: 'JetBrains Mono', monospace;
+    font-size: 12px; outline: none;
+  }
+  .env-input:focus { border-color: var(--accent); }
+  .key-input { width: 140px; flex-shrink: 0; }
+  .val-input { flex: 1; }
+  .env-eq { color: var(--mist-2); font-size: 13px; font-weight: 600; padding: 0 2px; }
+  .env-del {
+    width: 24px; height: 24px; border: none; background: transparent; color: var(--mist-2);
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    border-radius: 4px; flex-shrink: 0;
+  }
+  .env-del:hover { background: var(--red-tint); color: var(--red); }
+  .env-del :global(svg) { width: 12px; height: 12px; }
+
+  /* Pills */
   .pill { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
   .pill-green { background: var(--green-tint); color: var(--green); }
   .pill-mist { background: var(--surface-2); color: var(--mist); }
   .pill-red { background: var(--red-tint); color: var(--red); }
+  .pill-blue { background: var(--accent-tint); color: var(--accent-ink); }
 </style>

@@ -119,7 +119,7 @@ impl Repository for SqliteRepository {
 
     async fn list_stacks(&self, host_id: &str) -> Result<Vec<SavedStack>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, host_id, name, content, status, created_at, updated_at
+            "SELECT id, host_id, name, content, env_vars, webhook_token, status, created_at, updated_at
              FROM stacks WHERE host_id = ? ORDER BY updated_at DESC",
         )
         .bind(host_id)
@@ -131,7 +131,7 @@ impl Repository for SqliteRepository {
 
     async fn get_stack(&self, id: &str) -> Result<Option<SavedStack>, sqlx::Error> {
         let row = sqlx::query(
-            "SELECT id, host_id, name, content, status, created_at, updated_at
+            "SELECT id, host_id, name, content, env_vars, webhook_token, status, created_at, updated_at
              FROM stacks WHERE id = ?",
         )
         .bind(id)
@@ -165,15 +165,26 @@ impl Repository for SqliteRepository {
         Ok(id)
     }
 
-    async fn update_stack(&self, id: &str, content: &str) -> Result<(), sqlx::Error> {
+    async fn update_stack(&self, id: &str, content: &str, env_vars: Option<&str>) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "UPDATE stacks SET content = ?, updated_at = ? WHERE id = ?",
+            "UPDATE stacks SET content = ?, env_vars = ?, updated_at = ? WHERE id = ?",
         )
         .bind(content)
+        .bind(env_vars)
         .bind(Utc::now().to_rfc3339())
         .bind(id)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    async fn set_stack_webhook_token(&self, id: &str, token: Option<&str>) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE stacks SET webhook_token = ?, updated_at = ? WHERE id = ?")
+            .bind(token)
+            .bind(Utc::now().to_rfc3339())
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -196,6 +207,65 @@ impl Repository for SqliteRepository {
             .await?;
         Ok(())
     }
+
+    async fn get_webhook_token(
+        &self,
+        entity_type: &str,
+        entity_key: &str,
+        host_id: &str,
+    ) -> Result<Option<String>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT token FROM webhook_tokens WHERE entity_type = ? AND entity_key = ? AND host_id = ?",
+        )
+        .bind(entity_type)
+        .bind(entity_key)
+        .bind(host_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.get("token")))
+    }
+
+    async fn set_webhook_token(
+        &self,
+        entity_type: &str,
+        entity_key: &str,
+        host_id: &str,
+        token: &str,
+    ) -> Result<(), sqlx::Error> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO webhook_tokens (id, entity_type, entity_key, host_id, token, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(entity_type, entity_key, host_id) DO UPDATE SET token = excluded.token, created_at = excluded.created_at",
+        )
+        .bind(&id)
+        .bind(entity_type)
+        .bind(entity_key)
+        .bind(host_id)
+        .bind(token)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn delete_webhook_token(
+        &self,
+        entity_type: &str,
+        entity_key: &str,
+        host_id: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "DELETE FROM webhook_tokens WHERE entity_type = ? AND entity_key = ? AND host_id = ?",
+        )
+        .bind(entity_type)
+        .bind(entity_key)
+        .bind(host_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }
 
 fn row_to_env(r: &SqliteRow) -> Environment {
@@ -214,6 +284,8 @@ fn row_to_stack(r: &SqliteRow) -> SavedStack {
         host_id: r.get("host_id"),
         name: r.get("name"),
         content: r.get("content"),
+        env_vars: r.get("env_vars"),
+        webhook_token: r.get("webhook_token"),
         status: r.get("status"),
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),

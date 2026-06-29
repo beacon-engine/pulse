@@ -40,9 +40,34 @@ pub trait Repository: Send + Sync {
         content: &str,
     ) -> Result<String, sqlx::Error>;
 
-    async fn update_stack(&self, id: &str, content: &str) -> Result<(), sqlx::Error>;
+    async fn update_stack(&self, id: &str, content: &str, env_vars: Option<&str>) -> Result<(), sqlx::Error>;
 
     async fn update_stack_status(&self, id: &str, status: &str) -> Result<(), sqlx::Error>;
 
+    async fn set_stack_webhook_token(&self, id: &str, token: Option<&str>) -> Result<(), sqlx::Error>;
+
     async fn delete_stack(&self, id: &str) -> Result<(), sqlx::Error>;
+
+    // ── Generic webhook token management ──────────────────────────────────────
+    async fn get_webhook_token(
+        &self,
+        entity_type: &str,
+        entity_key: &str,
+        host_id: &str,
+    ) -> Result<Option<String>, sqlx::Error>;
+
+    async fn set_webhook_token(
+        &self,
+        entity_type: &str,
+        entity_key: &str,
+        host_id: &str,
+        token: &str,
+    ) -> Result<(), sqlx::Error>;
+
+    async fn delete_webhook_token(
+        &self,
+        entity_type: &str,
+        entity_key: &str,
+        host_id: &str,
+    ) -> Result<(), sqlx::Error>;
 }

@@ -77,6 +77,7 @@ async fn handle_event(
     };
 
     let _ = db.record_event(&container_id, &container_name, event_type).await;
+    crate::observability::metrics::record_event(event_type);
 
     let ws_msg = format!(
         "{{\"event\":\"{event_type}\",\"container\":\"{container_name}\"}}",
