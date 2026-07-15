@@ -194,6 +194,7 @@ dependencies = [
  "axum",
  "bollard",
  "chrono",
+ "dotenvy",
  "futures-util",
  "k8s-openapi",
  "kube",

@@ -6,14 +6,21 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Self {
+        dotenvy::dotenv().ok(); // Load env file
+
+        // Self {
+        //     slack_webhook_url: std::env::var("SLACK_WEBHOOK_URL").ok(),
+        //     port: std::env::var("BEACON_PORT")
+        //         .ok()
+        //         .and_then(|v| v.parse().ok())
+        //         .unwrap_or(9000),
+        //     database_url: std::env::var("DATABASE_URL")
+        //         .unwrap_or_else(|_| "sqlite://beacon.db".to_string()),
+        // }
         Self {
             slack_webhook_url: std::env::var("SLACK_WEBHOOK_URL").ok(),
-            port: std::env::var("BEACON_PORT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(9000),
-            database_url: std::env::var("DATABASE_URL")
-                .unwrap_or_else(|_| "sqlite://beacon.db".to_string()),
+            port: std::env::var("BEACON_PORT").ok().and_then(|v| v.parse().ok()).unwrap_or(9000),
+            database_url: std::env::var("DATABASE_URL").ok().unwrap(),
         }
     }
 }

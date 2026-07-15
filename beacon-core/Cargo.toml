@@ -44,3 +44,4 @@ uuid = { version = "1", features = ["v4"] }
 
 # System hardware metrics
 sysinfo = "0.32"
+dotenvy = "0.15.7"
