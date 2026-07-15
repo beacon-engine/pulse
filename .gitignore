@@ -22,3 +22,5 @@ target
 
 frontend/dist
 frontend/node_modules
+
+beacon-core/beacon.db
