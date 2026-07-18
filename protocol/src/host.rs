@@ -1,15 +1,8 @@
-use serde::Serialize;
+//! Persisted host and stack records.
 
-#[derive(Serialize)]
-pub struct ContainerEvent {
-    pub id: String,
-    pub container_id: String,
-    pub container_name: String,
-    pub event: String,
-    pub occurred_at: String,
-}
+use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Environment {
     pub id: String,
     pub name: String,
@@ -18,7 +11,7 @@ pub struct Environment {
     pub created_at: String,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SavedStack {
     pub id: String,
     pub host_id: String,

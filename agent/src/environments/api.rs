@@ -3,53 +3,22 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use serde::Deserialize;
 use std::sync::Arc;
 
 use bollard::Docker;
 
 use crate::{
-    containers::docker::{self, PortMap},
+    containers::docker,
     observability::{alerts, metrics},
     state::AppState,
     storage::models::Environment,
 };
 
-#[derive(Deserialize)]
-pub struct CreateHostBody {
-    pub name: String,
-    pub docker_host: String,
-}
-
-#[derive(Deserialize)]
-pub struct RenameHostBody {
-    pub name: String,
-}
-
-#[derive(Deserialize, Default)]
-pub struct LogsQuery {
-    pub tail: Option<u32>,
-}
-
-#[derive(Deserialize)]
-pub struct RecreateBody {
-    pub ports: Vec<PortMap>,
-}
-
-#[derive(Deserialize)]
-pub struct EnvBody {
-    pub env: Vec<String>,
-}
-
-#[derive(Deserialize)]
-pub struct ExecBody {
-    pub cmd: Vec<String>,
-}
-
-#[derive(Deserialize)]
-pub struct NetworkBody {
-    pub network_id: String,
-}
+// Request bodies live in the `protocol` crate so the gateway can construct the
+// same payloads it forwards to the agent.
+pub use protocol::protocol::request::{
+    CreateHostBody, EnvBody, ExecBody, LogsQuery, NetworkBody, RecreateBody, RenameHostBody,
+};
 
 // ── Host CRUD ─────────────────────────────────────────────────────────────────
 

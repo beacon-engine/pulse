@@ -7,73 +7,18 @@ use bollard::query_parameters::{
 };
 use bollard::Docker;
 use futures_util::StreamExt;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-// ── Basic container info (list view) ─────────────────────────────────────────
+// ── Shared wire types (defined in the `protocol` crate) ──────────────────────
+//
+// These describe what the agent returns to the gateway; they live in `protocol`
+// so the gateway can deserialize them without duplicating the definitions.
 
-#[derive(Serialize, Clone)]
-pub struct ContainerInfo {
-    pub id: String,
-    pub name: String,
-    pub image: String,
-    pub status: String,
-    pub state: String,
-    pub stack: Option<String>,
-}
-
-// ── Detailed inspect types ────────────────────────────────────────────────────
-
-#[derive(Serialize)]
-pub struct ContainerPort {
-    pub container_port: String,
-    pub protocol: String,
-    pub host_ip: String,
-    pub host_port: String,
-}
-
-#[derive(Serialize)]
-pub struct ContainerMount {
-    pub source: String,
-    pub destination: String,
-    pub mode: String,
-    pub rw: bool,
-}
-
-#[derive(Serialize)]
-pub struct ContainerDetail {
-    pub id: String,
-    pub name: String,
-    pub image: String,
-    pub created: String,
-    pub state: String,
-    pub started_at: String,
-    pub finished_at: String,
-    pub restart_count: i64,
-    pub ports: Vec<ContainerPort>,
-    pub mounts: Vec<ContainerMount>,
-    pub env: Vec<String>,
-    pub cmd: Vec<String>,
-    pub network_mode: String,
-    pub restart_policy: String,
-}
-
-// ── Stacks ────────────────────────────────────────────────────────────────────
-
-#[derive(Serialize)]
-pub struct Stack {
-    pub name: String,
-    pub services: Vec<ContainerInfo>,
-}
-
-// ── Port-remapping input (for recreate) ───────────────────────────────────────
-
-#[derive(Deserialize)]
-pub struct PortMap {
-    pub host_port: String,
-    pub container_port: String,
-    pub protocol: String,
-}
+pub use protocol::data::container::{
+    ContainerDetail, ContainerInfo, ContainerMount, ContainerNetworkInfo, ContainerPort,
+    HostNetwork, ImageInfo, PortMap, Stack, VolumeInfo,
+};
+pub use protocol::data::system::{DiskInfo, HardwareMetrics, SystemInfo};
 
 // ── Connect ───────────────────────────────────────────────────────────────────
 
@@ -383,20 +328,6 @@ pub async fn list_stacks(docker: &Docker) -> Result<Vec<Stack>, bollard::errors:
 
 // ── System info ───────────────────────────────────────────────────────────────
 
-#[derive(Serialize)]
-pub struct SystemInfo {
-    pub docker_version: String,
-    pub api_version: String,
-    pub os: String,
-    pub arch: String,
-    pub kernel: String,
-    pub total_memory: i64,
-    pub cpus: i64,
-    pub containers_running: i64,
-    pub containers_stopped: i64,
-    pub images: i64,
-}
-
 pub async fn system_info(docker: &Docker) -> Result<SystemInfo, bollard::errors::Error> {
     let info = docker.info().await?;
     Ok(SystemInfo {
@@ -421,15 +352,6 @@ pub async fn system_info(docker: &Docker) -> Result<SystemInfo, bollard::errors:
 }
 
 // ── Images ────────────────────────────────────────────────────────────────────
-
-#[derive(Serialize)]
-pub struct ImageInfo {
-    pub id: String,
-    pub tags: Vec<String>,
-    pub size: i64,
-    pub created: i64,
-    pub dangling: bool,
-}
 
 pub async fn list_images(docker: &Docker) -> Result<Vec<ImageInfo>, bollard::errors::Error> {
     use bollard::image::ListImagesOptions;
@@ -466,14 +388,6 @@ pub async fn prune_images(docker: &Docker) -> Result<i64, bollard::errors::Error
 
 // ── Volumes ───────────────────────────────────────────────────────────────────
 
-#[derive(Serialize)]
-pub struct VolumeInfo {
-    pub name: String,
-    pub driver: String,
-    pub mountpoint: String,
-    pub created: String,
-}
-
 pub async fn list_volumes(docker: &Docker) -> Result<Vec<VolumeInfo>, bollard::errors::Error> {
     let result = docker
         .list_volumes(None::<bollard::query_parameters::ListVolumesOptions>)
@@ -504,24 +418,6 @@ pub async fn prune_volumes(docker: &Docker) -> Result<i64, bollard::errors::Erro
 }
 
 // ── Networks ──────────────────────────────────────────────────────────────────
-
-#[derive(Serialize, Clone)]
-pub struct HostNetwork {
-    pub id: String,
-    pub name: String,
-    pub driver: String,
-    pub scope: String,
-    pub internal: bool,
-}
-
-#[derive(Serialize, Clone)]
-pub struct ContainerNetworkInfo {
-    pub id: String,
-    pub name: String,
-    pub ip_address: String,
-    pub gateway: String,
-    pub mac_address: String,
-}
 
 pub async fn list_host_networks(docker: &Docker) -> Result<Vec<HostNetwork>, bollard::errors::Error> {
     let nets = docker.list_networks(None::<bollard::network::ListNetworksOptions<String>>).await?;
@@ -628,23 +524,6 @@ pub async fn exec_command(
 }
 
 // ── Hardware metrics (local machine) ──────────────────────────────────────────
-
-#[derive(serde::Serialize, Clone)]
-pub struct DiskInfo {
-    pub name: String,
-    pub mount: String,
-    pub total: u64,
-    pub used: u64,
-    pub pct: f32,
-}
-
-#[derive(serde::Serialize)]
-pub struct HardwareMetrics {
-    pub mem_used: u64,
-    pub mem_total: u64,
-    pub mem_pct: f32,
-    pub disks: Vec<DiskInfo>,
-}
 
 pub fn hardware_metrics() -> HardwareMetrics {
     use sysinfo::System;

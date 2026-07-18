@@ -1,20 +1,7 @@
 use k8s_openapi::api::core::v1::{Namespace, Pod};
 use kube::{api::ListParams, Api, Client};
-use serde::Serialize;
 
-#[derive(Serialize)]
-pub struct PodInfo {
-    pub name: String,
-    pub namespace: String,
-    pub status: String,
-    pub ready: bool,
-}
-
-#[derive(Serialize)]
-pub struct NamespaceInfo {
-    pub name: String,
-    pub status: String,
-}
+pub use protocol::data::orchestration::{NamespaceInfo, PodInfo};
 
 pub async fn connect() -> Result<Client, kube::Error> {
     Client::try_default().await

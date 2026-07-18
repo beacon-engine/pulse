@@ -17,10 +17,7 @@ pub struct PullQuery {
     pub token: Option<String>,
 }
 
-#[derive(Serialize)]
-pub struct TokenResponse {
-    pub token: String,
-}
+pub use protocol::protocol::response::TokenResponse;
 
 #[derive(Serialize)]
 pub struct TokenStatusResponse {

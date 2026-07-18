@@ -3,41 +3,14 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{stacks::compose, state::AppState};
 use crate::storage::models::SavedStack;
 
-#[derive(Deserialize)]
-pub struct CreateStackBody {
-    pub name: String,
-    pub content: String,
-}
-
-#[derive(Deserialize, Serialize, Clone)]
-pub struct EnvVar {
-    pub key: String,
-    pub value: String,
-}
-
-#[derive(Deserialize)]
-pub struct UpdateStackBody {
-    pub content: String,
-    pub env_vars: Option<Vec<EnvVar>>,
-}
-
-#[derive(Serialize)]
-pub struct StackOpResponse {
-    pub id: String,
-    pub status: String,
-    pub output: String,
-}
-
-#[derive(Serialize)]
-pub struct TokenResponse {
-    pub token: String,
-}
+// Stack request/response payloads are shared with the gateway via `protocol`.
+pub use protocol::protocol::request::{CreateStackBody, UpdateStackBody};
+pub use protocol::protocol::response::{StackOpResponse, TokenResponse};
 
 pub async fn list(
     State(state): State<AppState>,

@@ -2,27 +2,8 @@ pub mod api;
 
 use bollard::Docker;
 use bollard::query_parameters::{ListNodesOptions, ListServicesOptions};
-use serde::Serialize;
 
-#[derive(Serialize)]
-pub struct SwarmService {
-    pub id: String,
-    pub name: String,
-    pub image: String,
-    pub replicas: u64,
-    pub running: u64,
-    pub desired_state: String,
-}
-
-#[derive(Serialize)]
-pub struct SwarmNode {
-    pub id: String,
-    pub hostname: String,
-    pub role: String,
-    pub state: String,
-    pub availability: String,
-    pub addr: String,
-}
+pub use protocol::data::orchestration::{SwarmNode, SwarmService};
 
 pub async fn services(docker: &Docker) -> Result<Vec<SwarmService>, bollard::errors::Error> {
     let opts: Option<ListServicesOptions> = None;
