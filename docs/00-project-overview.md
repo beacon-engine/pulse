@@ -143,7 +143,7 @@ Beacon will be considered successful if it achieves:
 
 | Feature | Portainer | Rancher | Beacon |
 |---------|-----------|---------|--------|
-| Memory Footprint | ~200MB | ~500MB | **~100MB** |
+| Memory Footprint | ~200MB | ~500MB | **<100MB (target)** |
 | GitOps Reconciliation | ❌ | ⚠️ (via Fleet) | ✅ Native |
 | Native Observability | ❌ | ⚠️ Limited | ✅ Full |
 | API/UI Parity | ❌ | ✅ | ✅ |
