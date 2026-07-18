@@ -9,11 +9,11 @@
 
 Beacon is a modern alternative to Portainer, built from the ground up to address critical gaps in container orchestration platforms:
 
-- **50% smaller memory footprint** than Go-based alternatives
+- **Lightweight** — Rust core with no garbage collector or heavy runtime
 - **Native GitOps reconciliation** with drift detection and auto-remediation
 - **First-class observability** with Prometheus, Grafana, and OpenTelemetry
 - **Real-time alerting** via Slack, Discord, and webhooks
-- **Lightning fast** with sub-100ms API response times
+- **Fast, async core** built on Tokio and Axum
 - **API-first design** with complete UI/API feature parity
 
 ## Why Beacon?
@@ -79,7 +79,7 @@ Beacon solves these problems with a purpose-built, Rust-powered platform.
 ### Backend
 
 ```bash
-cd beacon-core
+cd agent
 cargo run
 ```
 
@@ -125,36 +125,68 @@ Dashboard at `http://localhost:5173`.
 
 ## Architecture
 
+Beacon is split into three Rust crates plus the frontend:
+
+- **`agent/`** — runs alongside Docker/Kubernetes on each host. Talks to the
+  Docker and Kubernetes APIs, executes container/stack operations, and reports
+  system + hardware metrics. (crate name: `beacon-core`)
+- **`gateway/`** — central control plane (in progress). Connects to agents over
+  TCP and exposes the HTTP API consumed by the frontend.
+- **`protocol/`** — shared wire types linked by both `agent` and `gateway`, so
+  the request/response vocabulary is defined exactly once instead of duplicated
+  on each side.
+
 ```
 beacon/
-  beacon-core/src/
+  protocol/src/          ← shared gateway <-> agent wire types
+    data/
+      container.rs       ← ContainerInfo, ContainerDetail, ImageInfo, VolumeInfo,
+                            HostNetwork, ContainerEvent, Stack, PortMap, …
+      system.rs          ← SystemInfo, HardwareMetrics, DiskInfo
+      orchestration.rs   ← SwarmService, SwarmNode, PodInfo, NamespaceInfo
+    host.rs              ← Environment, SavedStack
+    protocol/
+      request.rs         ← request bodies the gateway sends (CreateHostBody,
+                            RecreateBody, ExecBody, CreateStackBody, …)
+      response.rs        ← response envelopes the agent returns (StackOpResponse,
+                            TokenResponse)
+  agent/src/             ← beacon-core: Docker/K8s operations + HTTP API
     main.rs              ← wiring only
     config.rs            ← env var config
     state.rs             ← shared app state
     containers/
-      api.rs             ← HTTP handlers
-      docker.rs          ← Docker client operations
+      docker.rs          ← Docker client operations (returns protocol types)
       watcher.rs         ← Docker event stream (crash detection)
+    environments/        ← per-host container/system/image/volume/network handlers
+    stacks/              ← compose stack management
+    swarm/               ← Docker Swarm operations
     orchestration/
-      api.rs             ← Kubernetes HTTP handlers
       kubernetes.rs      ← Kubernetes client operations
     observability/
       alerts.rs          ← Slack webhooks
       metrics.rs         ← Prometheus metrics
       websocket.rs       ← WebSocket broadcast
     storage/
-      models.rs          ← Data types
+      models.rs          ← re-exports protocol record types (Environment, …)
       repository.rs      ← Repository trait (swap DB backends here)
       sqlite.rs          ← SQLite implementation
+    webhooks/            ← token-protected deploy/recreate webhooks
+  gateway/src/           ← control plane (WIP)
   frontend/src/
     types/containers.ts  ← Shared TypeScript types
     lib/api.ts           ← Fetch wrappers
     lib/websocket.ts     ← WebSocket client
     components/
-      ContainerCard.svelte
-      StatusBadge.svelte
     App.svelte
 ```
+
+> **Sharing types across crates:** any struct that crosses the gateway ↔ agent
+> boundary lives in `protocol` and derives both `Serialize` and `Deserialize`,
+> so the gateway can build a request and decode the agent's response using the
+> exact same definition. Agent modules re-export these types (e.g.
+> `docker::ContainerInfo`, `storage::models::Environment`) so call sites are
+> unchanged. Agent-internal types (config, app state, DB repository, webhook
+> envelopes) stay in `agent`.
 
 ### Switching databases
 
@@ -180,7 +212,9 @@ Nothing else changes.
 
 ## Performance Goals
 
-- Memory footprint: <100MB (vs Portainer ~200MB)
+> Targets, not yet benchmarked.
+
+- Memory footprint: <100MB
 - API latency: <100ms for common operations
 - Drift detection: <5 seconds
 - Uptime: 99.9% for monitoring/alerting
