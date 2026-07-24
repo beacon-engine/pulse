@@ -12,6 +12,8 @@ pub struct ProxyError {
     pub error: String,
 }
 
+/// Proxies a PromQL query to a Prometheus server. This is a pure HTTP passthrough
+/// and needs no agent involvement, so it lives entirely in the gateway.
 pub async fn query(
     Query(params): Query<ProxyQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ProxyError>)> {

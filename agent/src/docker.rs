@@ -20,12 +20,6 @@ pub use protocol::data::container::{
 };
 pub use protocol::data::system::{DiskInfo, HardwareMetrics, SystemInfo};
 
-// ── Connect ───────────────────────────────────────────────────────────────────
-
-pub fn connect() -> Result<Docker, bollard::errors::Error> {
-    Docker::connect_with_local_defaults()
-}
-
 // ── List ──────────────────────────────────────────────────────────────────────
 
 pub async fn list(docker: &Docker) -> Result<Vec<ContainerInfo>, bollard::errors::Error> {

@@ -1,3 +1,6 @@
+//! Prometheus metrics for the gateway process.
+#![allow(dead_code)]
+
 use prometheus::{
     register_counter_vec, register_gauge, register_int_gauge, CounterVec, Gauge, IntGauge,
     TextEncoder,

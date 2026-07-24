@@ -14,7 +14,7 @@ axum = { version = "0.7", features = ["ws"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# HTTP client for Slack webhooks
+# HTTP client for Slack webhooks + Prometheus proxy
 reqwest = { version = "0.12", features = ["json"] }
 
 # Database
@@ -26,11 +26,15 @@ chrono = { version = "0.4", features = ["serde"] }
 # Async trait support (needed for dyn Repository)
 async-trait = "0.1"
 
-# UUID generation for environment IDs
+# UUID generation for host / token IDs
 uuid = { version = "1", features = ["v4"] }
 
-# System hardware metrics
-sysinfo = "0.32"
+# Prometheus metrics
+prometheus = "0.13"
+
+# WebSocket / async stream utilities
+futures-util = "0.3"
+
 dotenvy = "0.15.7"
 
 # Shared gateway <-> agent wire types

@@ -1,172 +1,382 @@
-use axum::{
-    extract::{State, WebSocketUpgrade},
-    response::Response,
-    routing::{delete, get, post},
-    Json, Router,
-};
-use serde::Serialize;
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+//! Beacon agent — a stateless executor.
+//!
+//! The agent owns Docker, Docker Swarm and Kubernetes access. It listens on a
+//! TCP socket and answers [`Request`]s from the gateway with [`Response`]s. It
+//! keeps no database of its own: the gateway resolves each host to a
+//! `docker_host` connection string and passes it on every request.
 
+mod compose;
 mod config;
-mod containers;
-mod environments;
-mod observability;
-mod orchestration;
-mod stacks;
-mod state;
-mod storage;
+mod docker;
+mod events;
+mod kubernetes;
+mod manager;
 mod swarm;
-mod webhooks;
 
-use environments::manager::EnvironmentManager;
-use state::AppState;
+use std::fmt::Display;
+use std::sync::Arc;
+
+use tokio::net::{TcpListener, TcpStream};
+
+use protocol::wire::{read_frame, write_frame, Request, Response};
+
+struct AppState {
+    docker: Arc<manager::DockerManager>,
+    k8s: Option<kube::Client>,
+}
 
 #[tokio::main]
 async fn main() {
-    println!("Starting Beacon v0.1.0");
+    println!("Starting Beacon agent v0.1.0");
 
     let cfg = config::Config::from_env();
-    observability::metrics::init();
-    observability::metrics::init_events_counter();
 
-    let docker = containers::docker::connect().expect("Failed to connect to Docker daemon");
-    let events = Arc::new(observability::websocket::new_channel());
-
-    let db = storage::init(&cfg.database_url)
-        .await
-        .expect("Failed to initialize database");
-    println!("Database ready at {}", cfg.database_url);
-
-    let k8s = match orchestration::kubernetes::connect().await {
-        Ok(client) => { println!("Kubernetes connected"); Some(client) }
-        Err(e) => { println!("Kubernetes unavailable ({}), skipping", e); None }
+    let k8s = match kubernetes::connect().await {
+        Ok(client) => {
+            println!("Kubernetes connected");
+            Some(client)
+        }
+        Err(e) => {
+            println!("Kubernetes unavailable ({e}), skipping");
+            None
+        }
     };
 
-    if cfg.slack_webhook_url.is_some() {
-        println!("Slack alerting enabled");
-    }
-
-    let state = AppState {
-        docker: Arc::new(docker),
-        env_manager: Arc::new(EnvironmentManager::new()),
-        events,
-        slack_webhook: cfg.slack_webhook_url,
+    let state = Arc::new(AppState {
+        docker: Arc::new(manager::DockerManager::new()),
         k8s,
-        db,
-    };
-
-    let app = Router::new()
-        .route("/health", get(health_handler))
-        .route("/api/status", get(status_handler))
-        // Hosts (formerly environments) — CRUD
-        .route("/api/hosts", get(environments::api::list).post(environments::api::create))
-        .route("/api/hosts/:id", delete(environments::api::delete).put(environments::api::rename))
-        // Per-host container operations
-        .route("/api/hosts/:id/containers", get(environments::api::list_containers))
-        .route("/api/hosts/:id/containers/:cid/start", post(environments::api::start))
-        .route("/api/hosts/:id/containers/:cid/stop", post(environments::api::stop))
-        .route("/api/hosts/:id/containers/:cid/restart", post(environments::api::restart))
-        .route("/api/hosts/:id/containers/:cid/inspect", get(environments::api::inspect_container))
-        .route("/api/hosts/:id/containers/:cid/raw", get(environments::api::inspect_raw_container))
-        .route("/api/hosts/:id/containers/:cid/recreate", post(environments::api::recreate_container))
-        .route("/api/hosts/:id/containers/:cid/env", post(environments::api::update_container_env))
-        .route("/api/hosts/:id/containers/:cid/exec", post(environments::api::exec_container))
-        // System info
-        .route("/api/hosts/:id/system", get(environments::api::get_system_info))
-        .route("/api/hosts/:id/hardware", get(environments::api::get_hardware_metrics))
-        // Images
-        .route("/api/hosts/:id/images", get(environments::api::list_images))
-        .route("/api/hosts/:id/images/prune", post(environments::api::prune_images))
-        .route("/api/hosts/:id/images/:image_id", delete(environments::api::delete_image))
-        // Volumes
-        .route("/api/hosts/:id/volumes", get(environments::api::list_volumes))
-        .route("/api/hosts/:id/volumes/prune", post(environments::api::prune_volumes))
-        .route("/api/hosts/:id/volumes/:vol_name", delete(environments::api::delete_volume))
-        // Networks
-        .route("/api/hosts/:id/networks", get(environments::api::list_host_networks))
-        .route("/api/hosts/:id/containers/:cid/networks", get(environments::api::get_container_networks))
-        .route("/api/hosts/:id/containers/:cid/networks/connect", post(environments::api::network_connect))
-        .route("/api/hosts/:id/containers/:cid/networks/disconnect", post(environments::api::network_disconnect))
-        .route("/api/hosts/:id/containers/:cid/logs", get(environments::api::container_logs))
-        // Per-host stacks
-        .route("/api/hosts/:host_id/stacks", get(stacks::api::list).post(stacks::api::create))
-        .route("/api/hosts/:host_id/stacks/detected", get(environments::api::list_stacks))
-        .route("/api/hosts/:host_id/swarm/services", get(swarm::api::list_services))
-        .route("/api/hosts/:host_id/swarm/nodes", get(swarm::api::list_nodes))
-        // Webhook execution endpoints
-        .route("/api/webhooks/:host_id/:container_id/recreate", post(webhooks::api::recreate_container))
-        .route("/api/webhooks/:host_id/containers/:name/deploy", post(webhooks::api::deploy_container))
-        .route("/api/webhooks/:host_id/stacks/:stack_id/redeploy", post(webhooks::api::redeploy_stack))
-        .route("/api/webhooks/:host_id/swarm/:service_id/update", post(webhooks::api::update_swarm_service))
-        .route("/api/webhooks/:host_id/k8s/:namespace/:deployment/rollout", post(webhooks::api::k8s_rollout))
-        // Webhook token management (generic: entity_type = container | swarm | k8s)
-        .route("/api/webhooks/:host_id/:entity_type/:entity_key/token",
-            get(webhooks::api::get_token)
-            .post(webhooks::api::set_token)
-            .delete(webhooks::api::delete_token)
-        )
-        .route("/api/stacks/:stack_id", get(stacks::api::get).put(stacks::api::update).delete(stacks::api::delete))
-        .route("/api/stacks/:stack_id/up", post(stacks::api::up))
-        .route("/api/stacks/:stack_id/down", post(stacks::api::down))
-        .route("/api/stacks/:stack_id/token", post(stacks::api::set_token).delete(stacks::api::delete_token))
-        // Events (global, from local Docker)
-        .route("/api/events", get(containers::api::list_events))
-        // Prometheus proxy
-        .route("/api/prometheus/query", get(observability::prometheus_proxy::query))
-        // Kubernetes
-        .route("/api/k8s/pods", get(orchestration::api::pods))
-        .route("/api/k8s/namespaces", get(orchestration::api::namespaces))
-        .route("/metrics", get(metrics_handler))
-        .route("/ws", get(ws_handler))
-        .with_state(state.clone());
+    });
 
     let addr = format!("0.0.0.0:{}", cfg.port);
-    let listener = tokio::net::TcpListener::bind(&addr)
+    let listener = TcpListener::bind(&addr)
         .await
-        .unwrap_or_else(|_| panic!("Failed to bind to port {}", cfg.port));
+        .unwrap_or_else(|_| panic!("Failed to bind to TCP port {}", cfg.port));
 
-    println!("Beacon listening on http://localhost:{}", cfg.port);
+    println!("Beacon agent listening on tcp://{addr}");
 
-    tokio::spawn(containers::watcher::run(
-        state.docker.clone(),
-        state.db.clone(),
-        state.events.clone(),
-        state.slack_webhook.clone(),
-    ));
+    loop {
+        let (socket, peer) = match listener.accept().await {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("accept error: {e}");
+                continue;
+            }
+        };
 
-    axum::serve(listener, app).await.expect("Server failed to start");
+        let state = state.clone();
+        tokio::spawn(async move {
+            if let Err(e) = handle_conn(socket, state).await {
+                match e.kind() {
+                    // Peer closed cleanly between frames — normal.
+                    std::io::ErrorKind::UnexpectedEof => {}
+                    // Bytes that aren't our binary protocol (e.g. a browser or
+                    // health-check speaking HTTP to the agent port). Drop quietly
+                    // with a hint rather than spamming the log.
+                    std::io::ErrorKind::InvalidData => {
+                        eprintln!(
+                            "ignoring non-protocol connection from {peer} \
+                             (the agent speaks the binary gateway protocol on this port, not HTTP)"
+                        );
+                    }
+                    _ => eprintln!("connection error from {peer}: {e}"),
+                }
+            }
+        });
+    }
 }
 
-async fn health_handler() -> &'static str {
-    "OK"
+/// Reads framed requests from one connection until EOF, answering each in turn.
+/// A [`Request::WatchEvents`] takes over the connection and streams events.
+async fn handle_conn(mut socket: TcpStream, state: Arc<AppState>) -> std::io::Result<()> {
+    let (mut reader, mut writer) = socket.split();
+
+    loop {
+        let req: Request = read_frame(&mut reader).await?;
+
+        if let Request::WatchEvents { docker_host } = req {
+            match state.docker.client_for(&docker_host).await {
+                Ok(d) => events::watch(&d, &mut writer).await?,
+                Err(e) => {
+                    write_frame(&mut writer, &conn_error(e)).await?;
+                }
+            }
+            return Ok(());
+        }
+
+        let resp = dispatch(&state, req).await;
+        write_frame(&mut writer, &resp).await?;
+    }
 }
 
-#[derive(Serialize)]
-struct StatusResponse {
-    status: String,
-    version: String,
-    uptime_seconds: u64,
+fn conn_error(message: String) -> Response {
+    Response::Error { status: 502, message: format!("cannot connect to Docker: {message}") }
 }
 
-async fn status_handler() -> Json<StatusResponse> {
-    let uptime = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-        % 1000;
-    Json(StatusResponse {
-        status: "running".to_string(),
-        version: "0.1.0".to_string(),
-        uptime_seconds: uptime,
-    })
+fn exec_error<E: Display>(e: E) -> Response {
+    Response::Error { status: 500, message: e.to_string() }
 }
 
-async fn metrics_handler() -> String {
-    observability::metrics::render()
+/// Executes a single request and produces its response.
+async fn dispatch(state: &AppState, req: Request) -> Response {
+    // Resolve the Docker client for host-scoped requests once, up front.
+    macro_rules! docker {
+        ($host:expr) => {
+            match state.docker.client_for(&$host).await {
+                Ok(d) => d,
+                Err(e) => return conn_error(e),
+            }
+        };
+    }
+
+    match req {
+        Request::Ping => Response::Pong,
+
+        // ── Containers ─────────────────────────────────────────────────────────
+        Request::ListContainers { docker_host } => {
+            let d = docker!(docker_host);
+            match docker::list(&d).await {
+                Ok(v) => Response::Containers(v),
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::InspectContainer { docker_host, id } => {
+            let d = docker!(docker_host);
+            match docker::inspect(&d, &id).await {
+                Ok(v) => Response::ContainerDetail(v),
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::InspectRawContainer { docker_host, id } => {
+            let d = docker!(docker_host);
+            match docker::inspect_raw(&d, &id).await {
+                Ok(v) => Response::Raw(v),
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::RecreateContainer { docker_host, id, ports } => {
+            let d = docker!(docker_host);
+            match docker::recreate(&d, &id, &ports).await {
+                Ok(new_id) => Response::Id(new_id),
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::RecreateLatest { docker_host, id, pull } => {
+            let d = docker!(docker_host);
+            match docker::recreate_latest(&d, &id, pull).await {
+                Ok(new_id) => Response::Id(new_id),
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::UpdateContainerEnv { docker_host, id, env } => {
+            let d = docker!(docker_host);
+            match docker::update_env(&d, &id, &env).await {
+                Ok(new_id) => Response::Id(new_id),
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::ExecContainer { docker_host, id, cmd } => {
+            let d = docker!(docker_host);
+            match docker::exec_command(&d, &id, cmd).await {
+                Ok(out) => Response::Text(out),
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::StartContainer { docker_host, id } => {
+            let d = docker!(docker_host);
+            match docker::start(&d, &id).await {
+                Ok(()) => Response::Ok,
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::StopContainer { docker_host, id } => {
+            let d = docker!(docker_host);
+            match docker::stop(&d, &id).await {
+                Ok(()) => Response::Ok,
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::RestartContainer { docker_host, id } => {
+            let d = docker!(docker_host);
+            match docker::restart(&d, &id).await {
+                Ok(()) => Response::Ok,
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::ContainerLogs { docker_host, id, tail } => {
+            let d = docker!(docker_host);
+            match docker::logs(&d, &id, tail).await {
+                Ok(out) => Response::Text(out),
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::ContainerNetworks { docker_host, id } => {
+            let d = docker!(docker_host);
+            match docker::get_container_networks(&d, &id).await {
+                Ok(v) => Response::ContainerNetworks(v),
+                Err(e) => exec_error(e),
+            }
+        }
+
+        // ── System / hardware ────────────────────────────────────────────────────
+        Request::SystemInfo { docker_host } => {
+            let d = docker!(docker_host);
+            match docker::system_info(&d).await {
+                Ok(v) => Response::SystemInfo(v),
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::HardwareMetrics => Response::HardwareMetrics(docker::hardware_metrics()),
+
+        // ── Images ─────────────────────────────────────────────────────────────
+        Request::ListImages { docker_host } => {
+            let d = docker!(docker_host);
+            match docker::list_images(&d).await {
+                Ok(v) => Response::Images(v),
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::DeleteImage { docker_host, id } => {
+            let d = docker!(docker_host);
+            match docker::delete_image(&d, &id).await {
+                Ok(()) => Response::Ok,
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::PruneImages { docker_host } => {
+            let d = docker!(docker_host);
+            match docker::prune_images(&d).await {
+                Ok(n) => Response::Count(n),
+                Err(e) => exec_error(e),
+            }
+        }
+
+        // ── Volumes ────────────────────────────────────────────────────────────
+        Request::ListVolumes { docker_host } => {
+            let d = docker!(docker_host);
+            match docker::list_volumes(&d).await {
+                Ok(v) => Response::Volumes(v),
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::DeleteVolume { docker_host, name } => {
+            let d = docker!(docker_host);
+            match docker::delete_volume(&d, &name).await {
+                Ok(()) => Response::Ok,
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::PruneVolumes { docker_host } => {
+            let d = docker!(docker_host);
+            match docker::prune_volumes(&d).await {
+                Ok(n) => Response::Count(n),
+                Err(e) => exec_error(e),
+            }
+        }
+
+        // ── Networks ───────────────────────────────────────────────────────────
+        Request::ListHostNetworks { docker_host } => {
+            let d = docker!(docker_host);
+            match docker::list_host_networks(&d).await {
+                Ok(v) => Response::HostNetworks(v),
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::NetworkConnect { docker_host, network_id, container_id } => {
+            let d = docker!(docker_host);
+            match docker::connect_to_network(&d, &network_id, &container_id).await {
+                Ok(()) => Response::Ok,
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::NetworkDisconnect { docker_host, network_id, container_id } => {
+            let d = docker!(docker_host);
+            match docker::disconnect_from_network(&d, &network_id, &container_id).await {
+                Ok(()) => Response::Ok,
+                Err(e) => exec_error(e),
+            }
+        }
+
+        // ── Detected stacks ──────────────────────────────────────────────────────
+        Request::ListDetectedStacks { docker_host } => {
+            let d = docker!(docker_host);
+            match docker::list_stacks(&d).await {
+                Ok(v) => Response::DetectedStacks(v),
+                Err(e) => exec_error(e),
+            }
+        }
+
+        // ── Compose ──────────────────────────────────────────────────────────────
+        Request::ComposeUp { docker_host, stack } => match compose::up(&docker_host, &stack).await {
+            Ok(out) => Response::Text(out),
+            Err(e) => exec_error(e),
+        },
+        Request::ComposeDown { docker_host, stack } => {
+            match compose::down(&docker_host, &stack).await {
+                Ok(out) => Response::Text(out),
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::ComposePull { docker_host, stack } => {
+            match compose::pull(&docker_host, &stack).await {
+                Ok(out) => Response::Text(out),
+                Err(e) => exec_error(e),
+            }
+        }
+
+        // ── Swarm ──────────────────────────────────────────────────────────────
+        Request::ListSwarmServices { docker_host } => {
+            let d = docker!(docker_host);
+            match swarm::services(&d).await {
+                Ok(v) => Response::SwarmServices(v),
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::ListSwarmNodes { docker_host } => {
+            let d = docker!(docker_host);
+            match swarm::nodes(&d).await {
+                Ok(v) => Response::SwarmNodes(v),
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::UpdateSwarmService { docker_host, service_id } => {
+            let d = docker!(docker_host);
+            match swarm::force_update(&d, &service_id).await {
+                Ok(()) => Response::Ok,
+                Err(e) => exec_error(e),
+            }
+        }
+
+        // ── Kubernetes ───────────────────────────────────────────────────────────
+        Request::K8sPods => match &state.k8s {
+            None => k8s_unavailable(),
+            Some(c) => match kubernetes::list_pods(c).await {
+                Ok(v) => Response::Pods(v),
+                Err(e) => exec_error(e),
+            },
+        },
+        Request::K8sNamespaces => match &state.k8s {
+            None => k8s_unavailable(),
+            Some(c) => match kubernetes::list_namespaces(c).await {
+                Ok(v) => Response::Namespaces(v),
+                Err(e) => exec_error(e),
+            },
+        },
+        Request::K8sRollout { namespace, deployment } => match &state.k8s {
+            None => k8s_unavailable(),
+            Some(c) => match kubernetes::rollout(c, &namespace, &deployment).await {
+                Ok(()) => Response::Ok,
+                Err(e) => exec_error(e),
+            },
+        },
+
+        // Handled before dispatch — see handle_conn.
+        Request::WatchEvents { .. } => Response::Error {
+            status: 400,
+            message: "WatchEvents must be sent on a dedicated connection".into(),
+        },
+    }
 }
 
-async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
-    let tx = state.events.clone();
-    ws.on_upgrade(move |socket| observability::websocket::handle(socket, tx))
+fn k8s_unavailable() -> Response {
+    Response::Error { status: 503, message: "Kubernetes not connected".into() }
 }

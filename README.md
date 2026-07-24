@@ -78,12 +78,22 @@ Beacon solves these problems with a purpose-built, Rust-powered platform.
 
 ### Backend
 
+Beacon's backend is split into two processes:
+
+- **agent** — a stateless executor that owns Docker / Swarm / Kubernetes access
+  and listens on a **binary TCP** protocol (not HTTP).
+- **gateway** — the frontend-facing **HTTP** API. It owns the database and
+  forwards every Docker/Swarm/k8s operation to the agent over TCP.
+
+Start the agent first, then the gateway:
+
 ```bash
-cd agent
-cargo run
+cd agent && cargo run       # listens on tcp://localhost:9000 (override with BEACON_PORT)
+cd gateway && cargo run      # serves http://localhost:8080 (HTTP_PORT), connects to AGENT_ADDR (default 127.0.0.1:9000)
 ```
 
-Server starts on `http://localhost:9000` (override with `BEACON_PORT`).
+The frontend and all API clients talk to the **gateway** on `http://localhost:8080`.
+Nothing should send HTTP to the agent's port — it only speaks the gateway protocol.
 
 ### Frontend
 

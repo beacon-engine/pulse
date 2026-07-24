@@ -1,7 +1,6 @@
-pub mod api;
-
 use bollard::Docker;
 use bollard::query_parameters::{ListNodesOptions, ListServicesOptions};
+use bollard::service::{InspectServiceOptions, UpdateServiceOptions};
 
 pub use protocol::data::orchestration::{SwarmNode, SwarmService};
 
@@ -67,4 +66,41 @@ pub async fn nodes(docker: &Docker) -> Result<Vec<SwarmNode>, bollard::errors::E
             }
         })
         .collect())
+}
+
+/// Forces a rolling update of a swarm service by bumping its `force_update`
+/// counter — the swarm equivalent of "redeploy with the current spec".
+pub async fn force_update(docker: &Docker, service_id: &str) -> Result<(), bollard::errors::Error> {
+    let service = docker
+        .inspect_service(service_id, None::<InspectServiceOptions>)
+        .await?;
+
+    let version = service
+        .version
+        .and_then(|v| v.index)
+        .ok_or_else(|| bollard::errors::Error::DockerResponseServerError {
+            status_code: 500,
+            message: "missing service version".into(),
+        })?;
+
+    let mut spec = service
+        .spec
+        .ok_or_else(|| bollard::errors::Error::DockerResponseServerError {
+            status_code: 500,
+            message: "missing service spec".into(),
+        })?;
+
+    if let Some(ref mut tt) = spec.task_template {
+        tt.force_update = Some(tt.force_update.unwrap_or(0) + 1);
+    }
+
+    docker
+        .update_service(
+            service_id,
+            spec,
+            UpdateServiceOptions { version, ..Default::default() },
+            None,
+        )
+        .await?;
+    Ok(())
 }
