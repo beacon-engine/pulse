@@ -3,12 +3,13 @@ name = "beacon-core"
 version = "0.1.0"
 edition = "2021"
 
-[dependencies]
-# Async runtime
-tokio = { version = "1.36", features = ["full"] }
+[[bin]]
+name = "agent"
+path = "src/main.rs"
 
-# Web framework
-axum = { version = "0.7", features = ["ws"] }
+[dependencies]
+# Async runtime (net + process + io needed for the TCP server and docker compose)
+tokio = { version = "1.36", features = ["full"] }
 
 # JSON serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -17,30 +18,15 @@ serde_json = "1.0"
 # Docker API client
 bollard = "0.19"
 
-# Prometheus metrics
-prometheus = "0.13"
-
 # WebSocket / async stream utilities
 futures-util = "0.3"
-
-# HTTP client for Slack webhooks
-reqwest = { version = "0.12", features = ["json"] }
 
 # Kubernetes client
 kube = { version = "0.97", features = ["runtime", "client"] }
 k8s-openapi = { version = "0.23", features = ["v1_31"] }
 
-# Database
-sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "migrate"] }
-
-# Timestamps
+# Timestamps (k8s rollout annotation)
 chrono = { version = "0.4", features = ["serde"] }
-
-# Async trait support (needed for dyn Repository)
-async-trait = "0.1"
-
-# UUID generation for environment IDs
-uuid = { version = "1", features = ["v4"] }
 
 # System hardware metrics
 sysinfo = "0.32"

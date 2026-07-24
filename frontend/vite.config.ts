@@ -6,9 +6,9 @@ export default defineConfig({
   server: {
     port: 9003,
     proxy: {
-      '/api': 'http://localhost:9000',
-      '/metrics': 'http://localhost:9000',
-      '/ws': { target: 'ws://localhost:9000', ws: true },
+      '/api': 'http://localhost:8080',
+      '/metrics': 'http://localhost:8080',
+      '/ws': { target: 'ws://localhost:8080', ws: true },
     },
   },
 });

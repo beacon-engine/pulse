@@ -1,5 +1,7 @@
+use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{Namespace, Pod};
-use kube::{api::ListParams, Api, Client};
+use kube::api::{ListParams, Patch, PatchParams};
+use kube::{Api, Client};
 
 pub use protocol::data::orchestration::{NamespaceInfo, PodInfo};
 
@@ -45,4 +47,20 @@ pub async fn list_namespaces(client: &Client) -> Result<Vec<NamespaceInfo>, kube
             status: ns.status.and_then(|s| s.phase).unwrap_or_else(|| "Unknown".to_string()),
         })
         .collect())
+}
+
+/// Triggers a rollout restart of a deployment by stamping the standard
+/// `kubectl.kubernetes.io/restartedAt` pod-template annotation.
+pub async fn rollout(client: &Client, namespace: &str, deployment: &str) -> Result<(), kube::Error> {
+    let deployments: Api<Deployment> = Api::namespaced(client.clone(), namespace);
+    let now = chrono::Utc::now().to_rfc3339();
+    let patch = serde_json::json!({
+        "spec": { "template": { "metadata": { "annotations": {
+            "kubectl.kubernetes.io/restartedAt": now
+        } } } }
+    });
+    deployments
+        .patch(deployment, &PatchParams::default(), &Patch::Merge(patch))
+        .await?;
+    Ok(())
 }

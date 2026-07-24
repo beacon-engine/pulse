@@ -1,3 +1,9 @@
+//! Beacon gateway — the frontend-facing HTTP API.
+//!
+//! Owns the database (hosts, stacks, webhook tokens, events) and serves the
+//! frontend. Every Docker / Swarm / Kubernetes operation is forwarded to the
+//! agent over TCP (see [`agent::AgentClient`]).
+
 use axum::{
     extract::{State, WebSocketUpgrade},
     response::Response,
@@ -8,15 +14,25 @@ use serde::Serialize;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod agent;
+mod api;
 mod config;
+mod observability;
+mod state;
+mod storage;
+mod watcher;
 
+use agent::AgentClient;
+use observability::{metrics, prometheus_proxy, websocket};
 use state::AppState;
 
 #[tokio::main]
 async fn main() {
-    println!("Starting Beacon v0.1.0");
+    println!("Starting Beacon gateway v0.1.0");
 
     let cfg = config::Config::from_env();
+    metrics::init();
+    metrics::init_events_counter();
 
     let db = storage::init(&cfg.database_url)
         .await
@@ -27,78 +43,78 @@ async fn main() {
         println!("Slack alerting enabled");
     }
 
-    let worker = TcpStream::connect(&cfg.worker_addr).await.expect("Failed to connect to worker");
-
-    let events = Arc::new(observability::websocket::new_channel());
-    
     let state = AppState {
-        worker: Arc::new(Mutex::new(worker)),
-        events,
-        slack_webhook: cfg.slack_webhook_url,
+        agent: AgentClient::new(cfg.agent_addr.clone()),
         db,
+        events: Arc::new(websocket::new_channel()),
+        slack_webhook: cfg.slack_webhook_url,
     };
 
     let app = Router::new()
         .route("/health", get(health_handler))
         .route("/api/status", get(status_handler))
         // Hosts (formerly environments) — CRUD
-        .route("/api/hosts", get(environments::api::list).post(environments::api::create))
-        .route("/api/hosts/:id", delete(environments::api::delete).put(environments::api::rename))
+        .route("/api/hosts", get(api::hosts::list).post(api::hosts::create))
+        .route("/api/hosts/:id", delete(api::hosts::delete).put(api::hosts::rename))
         // Per-host container operations
-        .route("/api/hosts/:id/containers", get(environments::api::list_containers))
-        .route("/api/hosts/:id/containers/:cid/start", post(environments::api::start))
-        .route("/api/hosts/:id/containers/:cid/stop", post(environments::api::stop))
-        .route("/api/hosts/:id/containers/:cid/restart", post(environments::api::restart))
-        .route("/api/hosts/:id/containers/:cid/inspect", get(environments::api::inspect_container))
-        .route("/api/hosts/:id/containers/:cid/raw", get(environments::api::inspect_raw_container))
-        .route("/api/hosts/:id/containers/:cid/recreate", post(environments::api::recreate_container))
-        .route("/api/hosts/:id/containers/:cid/env", post(environments::api::update_container_env))
-        .route("/api/hosts/:id/containers/:cid/exec", post(environments::api::exec_container))
+        .route("/api/hosts/:id/containers", get(api::docker::list_containers))
+        .route("/api/hosts/:id/containers/:cid/start", post(api::docker::start))
+        .route("/api/hosts/:id/containers/:cid/stop", post(api::docker::stop))
+        .route("/api/hosts/:id/containers/:cid/restart", post(api::docker::restart))
+        .route("/api/hosts/:id/containers/:cid/inspect", get(api::docker::inspect_container))
+        .route("/api/hosts/:id/containers/:cid/raw", get(api::docker::inspect_raw_container))
+        .route("/api/hosts/:id/containers/:cid/recreate", post(api::docker::recreate_container))
+        .route("/api/hosts/:id/containers/:cid/env", post(api::docker::update_container_env))
+        .route("/api/hosts/:id/containers/:cid/exec", post(api::docker::exec_container))
         // System info
-        .route("/api/hosts/:id/system", get(environments::api::get_system_info))
-        .route("/api/hosts/:id/hardware", get(environments::api::get_hardware_metrics))
+        .route("/api/hosts/:id/system", get(api::docker::get_system_info))
+        .route("/api/hosts/:id/hardware", get(api::docker::get_hardware_metrics))
         // Images
-        .route("/api/hosts/:id/images", get(environments::api::list_images))
-        .route("/api/hosts/:id/images/prune", post(environments::api::prune_images))
-        .route("/api/hosts/:id/images/:image_id", delete(environments::api::delete_image))
+        .route("/api/hosts/:id/images", get(api::docker::list_images))
+        .route("/api/hosts/:id/images/prune", post(api::docker::prune_images))
+        .route("/api/hosts/:id/images/:image_id", delete(api::docker::delete_image))
         // Volumes
-        .route("/api/hosts/:id/volumes", get(environments::api::list_volumes))
-        .route("/api/hosts/:id/volumes/prune", post(environments::api::prune_volumes))
-        .route("/api/hosts/:id/volumes/:vol_name", delete(environments::api::delete_volume))
+        .route("/api/hosts/:id/volumes", get(api::docker::list_volumes))
+        .route("/api/hosts/:id/volumes/prune", post(api::docker::prune_volumes))
+        .route("/api/hosts/:id/volumes/:vol_name", delete(api::docker::delete_volume))
         // Networks
-        .route("/api/hosts/:id/networks", get(environments::api::list_host_networks))
-        .route("/api/hosts/:id/containers/:cid/networks", get(environments::api::get_container_networks))
-        .route("/api/hosts/:id/containers/:cid/networks/connect", post(environments::api::network_connect))
-        .route("/api/hosts/:id/containers/:cid/networks/disconnect", post(environments::api::network_disconnect))
-        .route("/api/hosts/:id/containers/:cid/logs", get(environments::api::container_logs))
+        .route("/api/hosts/:id/networks", get(api::docker::list_host_networks))
+        .route("/api/hosts/:id/containers/:cid/networks", get(api::docker::get_container_networks))
+        .route("/api/hosts/:id/containers/:cid/networks/connect", post(api::docker::network_connect))
+        .route("/api/hosts/:id/containers/:cid/networks/disconnect", post(api::docker::network_disconnect))
+        .route("/api/hosts/:id/containers/:cid/logs", get(api::docker::container_logs))
         // Per-host stacks
-        .route("/api/hosts/:host_id/stacks", get(stacks::api::list).post(stacks::api::create))
-        .route("/api/hosts/:host_id/stacks/detected", get(environments::api::list_stacks))
-        .route("/api/hosts/:host_id/swarm/services", get(swarm::api::list_services))
-        .route("/api/hosts/:host_id/swarm/nodes", get(swarm::api::list_nodes))
+        .route("/api/hosts/:host_id/stacks", get(api::stacks::list).post(api::stacks::create))
+        .route("/api/hosts/:host_id/stacks/detected", get(api::docker::list_stacks))
+        .route("/api/hosts/:host_id/swarm/services", get(api::docker::list_services))
+        .route("/api/hosts/:host_id/swarm/nodes", get(api::docker::list_nodes))
         // Webhook execution endpoints
-        .route("/api/webhooks/:host_id/:container_id/recreate", post(webhooks::api::recreate_container))
-        .route("/api/webhooks/:host_id/containers/:name/deploy", post(webhooks::api::deploy_container))
-        .route("/api/webhooks/:host_id/stacks/:stack_id/redeploy", post(webhooks::api::redeploy_stack))
-        .route("/api/webhooks/:host_id/swarm/:service_id/update", post(webhooks::api::update_swarm_service))
-        .route("/api/webhooks/:host_id/k8s/:namespace/:deployment/rollout", post(webhooks::api::k8s_rollout))
+        .route("/api/webhooks/:host_id/:container_id/recreate", post(api::webhooks::recreate_container))
+        .route("/api/webhooks/:host_id/containers/:name/deploy", post(api::webhooks::deploy_container))
+        .route("/api/webhooks/:host_id/stacks/:stack_id/redeploy", post(api::webhooks::redeploy_stack))
+        .route("/api/webhooks/:host_id/swarm/:service_id/update", post(api::webhooks::update_swarm_service))
+        .route("/api/webhooks/:host_id/k8s/:namespace/:deployment/rollout", post(api::webhooks::k8s_rollout))
         // Webhook token management (generic: entity_type = container | swarm | k8s)
-        .route("/api/webhooks/:host_id/:entity_type/:entity_key/token",
-            get(webhooks::api::get_token)
-            .post(webhooks::api::set_token)
-            .delete(webhooks::api::delete_token)
+        .route(
+            "/api/webhooks/:host_id/:entity_type/:entity_key/token",
+            get(api::webhooks::get_token)
+                .post(api::webhooks::set_token)
+                .delete(api::webhooks::delete_token),
         )
-        .route("/api/stacks/:stack_id", get(stacks::api::get).put(stacks::api::update).delete(stacks::api::delete))
-        .route("/api/stacks/:stack_id/up", post(stacks::api::up))
-        .route("/api/stacks/:stack_id/down", post(stacks::api::down))
-        .route("/api/stacks/:stack_id/token", post(stacks::api::set_token).delete(stacks::api::delete_token))
-        // Events (global, from local Docker)
-        .route("/api/events", get(containers::api::list_events))
+        .route(
+            "/api/stacks/:stack_id",
+            get(api::stacks::get).put(api::stacks::update).delete(api::stacks::delete),
+        )
+        .route("/api/stacks/:stack_id/up", post(api::stacks::up))
+        .route("/api/stacks/:stack_id/down", post(api::stacks::down))
+        .route("/api/stacks/:stack_id/token", post(api::stacks::set_token).delete(api::stacks::delete_token))
+        // Events (persisted lifecycle events)
+        .route("/api/events", get(api::events::list_events))
         // Prometheus proxy
-        .route("/api/prometheus/query", get(observability::prometheus_proxy::query))
+        .route("/api/prometheus/query", get(prometheus_proxy::query))
         // Kubernetes
-        .route("/api/k8s/pods", get(orchestration::api::pods))
-        .route("/api/k8s/namespaces", get(orchestration::api::namespaces))
+        .route("/api/k8s/pods", get(api::k8s::pods))
+        .route("/api/k8s/namespaces", get(api::k8s::namespaces))
         .route("/metrics", get(metrics_handler))
         .route("/ws", get(ws_handler))
         .with_state(state.clone());
@@ -108,9 +124,11 @@ async fn main() {
         .await
         .unwrap_or_else(|_| panic!("Failed to bind to port {}", cfg.http_port));
 
-    println!("Beacon listening on http://localhost:{}", cfg.http_port);
+    println!("Beacon gateway listening on http://localhost:{}", cfg.http_port);
+    println!("Forwarding Docker operations to agent at {}", cfg.agent_addr);
 
-    tokio::spawn(containers::watcher::run(state.db.clone()));
+    // Consume the agent's Docker event stream in the background.
+    tokio::spawn(watcher::run(state.clone()));
 
     axum::serve(listener, app).await.expect("Server failed to start");
 }
@@ -140,10 +158,10 @@ async fn status_handler() -> Json<StatusResponse> {
 }
 
 async fn metrics_handler() -> String {
-    observability::metrics::render()
+    metrics::render()
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     let tx = state.events.clone();
-    ws.on_upgrade(move |socket| observability::websocket::handle(socket, tx))
+    ws.on_upgrade(move |socket| websocket::handle(socket, tx))
 }

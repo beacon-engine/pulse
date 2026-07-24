@@ -4,17 +4,16 @@ use std::process::Stdio;
 
 use tokio::process::Command;
 
-use crate::state::AppState;
-use crate::storage::models::SavedStack;
+use protocol::wire::ComposeStack;
 
-fn project_dir(stack: &SavedStack) -> PathBuf {
+fn project_dir(stack: &ComposeStack) -> PathBuf {
     let mut dir = std::env::temp_dir();
     dir.push("beacon-stacks");
     dir.push(&stack.id);
     dir
 }
 
-fn write_compose_file(stack: &SavedStack) -> Result<PathBuf, String> {
+fn write_compose_file(stack: &ComposeStack) -> Result<PathBuf, String> {
     let dir = project_dir(stack);
     fs::create_dir_all(&dir).map_err(|e| format!("create stack dir: {e}"))?;
 
@@ -29,8 +28,7 @@ fn write_compose_file(stack: &SavedStack) -> Result<PathBuf, String> {
                     Some(format!("{k}={val}\n"))
                 })
                 .collect();
-            fs::write(dir.join(".env"), content)
-                .map_err(|e| format!("write .env file: {e}"))?;
+            fs::write(dir.join(".env"), content).map_err(|e| format!("write .env file: {e}"))?;
         }
     }
 
@@ -39,32 +37,27 @@ fn write_compose_file(stack: &SavedStack) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-async fn docker_env(state: &AppState, stack: &SavedStack) -> Result<Vec<(String, String)>, String> {
+/// Builds the environment for the `docker compose` child process, pointing it at
+/// the target daemon via `DOCKER_HOST` when the host is remote.
+fn docker_env(docker_host: &str) -> Vec<(String, String)> {
     let mut envs: Vec<(String, String)> = std::env::vars().collect();
-
-    let host = state
-        .db
-        .get_environment(&stack.host_id)
-        .await
-        .map_err(|e| format!("load host: {e}"))?
-        .ok_or_else(|| format!("host {} not found", stack.host_id))?;
-
-    if !host.docker_host.is_empty() && host.docker_host != "unix:///var/run/docker.sock" {
-        envs.push(("DOCKER_HOST".into(), host.docker_host));
+    if !docker_host.is_empty()
+        && docker_host != "unix:///var/run/docker.sock"
+        && !docker_host.starts_with("unix://")
+    {
+        envs.push(("DOCKER_HOST".into(), docker_host.to_string()));
     }
-
-    Ok(envs)
+    envs
 }
 
 async fn run_compose(
-    state: &AppState,
-    stack: &SavedStack,
+    docker_host: &str,
+    stack: &ComposeStack,
     args: &[&str],
 ) -> Result<String, String> {
     let path = write_compose_file(stack)?;
     let dir = project_dir(stack);
-
-    let envs = docker_env(state, stack).await?;
+    let envs = docker_env(docker_host);
 
     let mut cmd = Command::new("docker");
     cmd.arg("compose")
@@ -96,14 +89,14 @@ async fn run_compose(
     Ok(text)
 }
 
-pub async fn up(state: &AppState, stack: &SavedStack) -> Result<String, String> {
-    run_compose(state, stack, &["up", "-d", "--build", "--remove-orphans"]).await
+pub async fn up(docker_host: &str, stack: &ComposeStack) -> Result<String, String> {
+    run_compose(docker_host, stack, &["up", "-d", "--build", "--remove-orphans"]).await
 }
 
-pub async fn down(state: &AppState, stack: &SavedStack) -> Result<String, String> {
-    run_compose(state, stack, &["down", "--remove-orphans"]).await
+pub async fn down(docker_host: &str, stack: &ComposeStack) -> Result<String, String> {
+    run_compose(docker_host, stack, &["down", "--remove-orphans"]).await
 }
 
-pub async fn pull(state: &AppState, stack: &SavedStack) -> Result<String, String> {
-    run_compose(state, stack, &["pull"]).await
+pub async fn pull(docker_host: &str, stack: &ComposeStack) -> Result<String, String> {
+    run_compose(docker_host, stack, &["pull"]).await
 }
