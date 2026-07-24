@@ -1,6 +1,6 @@
 use bollard::Docker;
 use bollard::query_parameters::{ListNodesOptions, ListServicesOptions};
-use bollard::service::{InspectServiceOptions, UpdateServiceOptions};
+use bollard::query_parameters::{InspectServiceOptions, UpdateServiceOptionsBuilder};
 
 pub use protocol::data::orchestration::{SwarmNode, SwarmService};
 
@@ -98,7 +98,7 @@ pub async fn force_update(docker: &Docker, service_id: &str) -> Result<(), bolla
         .update_service(
             service_id,
             spec,
-            UpdateServiceOptions { version, ..Default::default() },
+            UpdateServiceOptionsBuilder::new().version(version as i32).build(),
             None,
         )
         .await?;

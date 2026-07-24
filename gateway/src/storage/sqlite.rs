@@ -4,7 +4,7 @@ use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
 use uuid::Uuid;
 
 use crate::storage::{
-    models::{ContainerEvent, Environment, SavedStack},
+    models::{ContainerEvent, Environment, SavedStack, Session, User},
     repository::Repository,
 };
 
@@ -265,6 +265,160 @@ impl Repository for SqliteRepository {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    // ── Users ─────────────────────────────────────────────────────────────────
+
+    async fn count_users(&self) -> Result<i64, sqlx::Error> {
+        let row = sqlx::query("SELECT COUNT(*) AS n FROM users")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.get::<i64, _>("n"))
+    }
+
+    async fn count_admins(&self) -> Result<i64, sqlx::Error> {
+        let row = sqlx::query("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.get::<i64, _>("n"))
+    }
+
+    async fn create_user(
+        &self,
+        username: &str,
+        password_hash: &str,
+        role: &str,
+    ) -> Result<String, sqlx::Error> {
+        let id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO users (id, username, password_hash, role, created_at)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(username)
+        .bind(password_hash)
+        .bind(role)
+        .bind(Utc::now().to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        Ok(id)
+    }
+
+    async fn get_user(&self, id: &str) -> Result<Option<User>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT id, username, password_hash, role, created_at FROM users WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.as_ref().map(row_to_user))
+    }
+
+    async fn get_user_by_username(&self, username: &str) -> Result<Option<User>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT id, username, password_hash, role, created_at FROM users WHERE username = ?",
+        )
+        .bind(username)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.as_ref().map(row_to_user))
+    }
+
+    async fn list_users(&self) -> Result<Vec<User>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, username, password_hash, role, created_at FROM users ORDER BY created_at ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(row_to_user).collect())
+    }
+
+    async fn update_user_role(&self, id: &str, role: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE users SET role = ? WHERE id = ?")
+            .bind(role)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn update_user_password(&self, id: &str, password_hash: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+            .bind(password_hash)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_user(&self, id: &str) -> Result<(), sqlx::Error> {
+        // Sessions cascade via the foreign key.
+        sqlx::query("DELETE FROM users WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    // ── Sessions ────────────────────────────────────────────────────────────────
+
+    async fn create_session(
+        &self,
+        token: &str,
+        user_id: &str,
+        expires_at: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(token)
+        .bind(user_id)
+        .bind(Utc::now().to_rfc3339())
+        .bind(expires_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_session(&self, token: &str) -> Result<Option<Session>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT token, user_id, created_at, expires_at FROM sessions WHERE token = ?",
+        )
+        .bind(token)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| Session {
+            token: r.get("token"),
+            user_id: r.get("user_id"),
+            created_at: r.get("created_at"),
+            expires_at: r.get("expires_at"),
+        }))
+    }
+
+    async fn delete_session(&self, token: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM sessions WHERE token = ?")
+            .bind(token)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_user_sessions(&self, user_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM sessions WHERE user_id = ?")
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
+fn row_to_user(r: &SqliteRow) -> User {
+    User {
+        id: r.get("id"),
+        username: r.get("username"),
+        password_hash: r.get("password_hash"),
+        role: r.get("role"),
+        created_at: r.get("created_at"),
     }
 }
 

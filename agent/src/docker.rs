@@ -348,9 +348,9 @@ pub async fn system_info(docker: &Docker) -> Result<SystemInfo, bollard::errors:
 // ── Images ────────────────────────────────────────────────────────────────────
 
 pub async fn list_images(docker: &Docker) -> Result<Vec<ImageInfo>, bollard::errors::Error> {
-    use bollard::image::ListImagesOptions;
+    // `all: false` is the Docker default, so no options are needed.
     let images = docker
-        .list_images(Some(ListImagesOptions::<String> { all: false, ..Default::default() }))
+        .list_images(None::<bollard::query_parameters::ListImagesOptions>)
         .await?;
     Ok(images
         .into_iter()
@@ -369,14 +369,17 @@ pub async fn list_images(docker: &Docker) -> Result<Vec<ImageInfo>, bollard::err
 }
 
 pub async fn delete_image(docker: &Docker, id: &str) -> Result<(), bollard::errors::Error> {
-    use bollard::image::RemoveImageOptions;
-    docker.remove_image(id, Some(RemoveImageOptions { force: true, ..Default::default() }), None).await?;
+    use bollard::query_parameters::RemoveImageOptionsBuilder;
+    docker
+        .remove_image(id, Some(RemoveImageOptionsBuilder::new().force(true).build()), None)
+        .await?;
     Ok(())
 }
 
 pub async fn prune_images(docker: &Docker) -> Result<i64, bollard::errors::Error> {
-    use bollard::image::PruneImagesOptions;
-    let result = docker.prune_images(Some(PruneImagesOptions::<String>::default())).await?;
+    let result = docker
+        .prune_images(None::<bollard::query_parameters::PruneImagesOptions>)
+        .await?;
     Ok(result.space_reclaimed.unwrap_or(0))
 }
 
@@ -400,8 +403,10 @@ pub async fn list_volumes(docker: &Docker) -> Result<Vec<VolumeInfo>, bollard::e
 }
 
 pub async fn delete_volume(docker: &Docker, name: &str) -> Result<(), bollard::errors::Error> {
-    use bollard::volume::RemoveVolumeOptions;
-    docker.remove_volume(name, Some(RemoveVolumeOptions { force: true })).await
+    use bollard::query_parameters::RemoveVolumeOptionsBuilder;
+    docker
+        .remove_volume(name, Some(RemoveVolumeOptionsBuilder::new().force(true).build()))
+        .await
 }
 
 pub async fn prune_volumes(docker: &Docker) -> Result<i64, bollard::errors::Error> {
@@ -414,7 +419,7 @@ pub async fn prune_volumes(docker: &Docker) -> Result<i64, bollard::errors::Erro
 // ── Networks ──────────────────────────────────────────────────────────────────
 
 pub async fn list_host_networks(docker: &Docker) -> Result<Vec<HostNetwork>, bollard::errors::Error> {
-    let nets = docker.list_networks(None::<bollard::network::ListNetworksOptions<String>>).await?;
+    let nets = docker.list_networks(None::<bollard::query_parameters::ListNetworksOptions>).await?;
     Ok(nets
         .into_iter()
         .map(|n| HostNetwork {
@@ -456,9 +461,9 @@ pub async fn connect_to_network(
     docker
         .connect_network(
             network_id,
-            bollard::network::ConnectNetworkOptions {
-                container: container_id,
-                endpoint_config: bollard::models::EndpointSettings::default(),
+            bollard::models::NetworkConnectRequest {
+                container: Some(container_id.to_string()),
+                endpoint_config: Some(bollard::models::EndpointSettings::default()),
             },
         )
         .await
@@ -472,9 +477,9 @@ pub async fn disconnect_from_network(
     docker
         .disconnect_network(
             network_id,
-            bollard::network::DisconnectNetworkOptions {
-                container: container_id,
-                force: false,
+            bollard::models::NetworkDisconnectRequest {
+                container: Some(container_id.to_string()),
+                force: Some(false),
             },
         )
         .await

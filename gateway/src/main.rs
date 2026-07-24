@@ -6,6 +6,7 @@
 
 use axum::{
     extract::{State, WebSocketUpgrade},
+    middleware,
     response::Response,
     routing::{delete, get, post},
     Json, Router,
@@ -16,6 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 mod agent;
 mod api;
+mod auth;
 mod config;
 mod observability;
 mod state;
@@ -50,9 +52,15 @@ async fn main() {
         slack_webhook: cfg.slack_webhook_url,
     };
 
-    let app = Router::new()
-        .route("/health", get(health_handler))
-        .route("/api/status", get(status_handler))
+    // Routes that require an authenticated session. A viewer may issue read
+    // (GET) requests; state-changing requests require an admin (see enforce_role).
+    let protected = Router::new()
+        // Auth (session-scoped)
+        .route("/api/auth/logout", post(api::auth::logout))
+        .route("/api/auth/me", get(api::auth::me))
+        // User management (admin only, enforced in-handler)
+        .route("/api/users", get(api::users::list).post(api::users::create))
+        .route("/api/users/:id", axum::routing::put(api::users::update).delete(api::users::delete))
         // Hosts (formerly environments) — CRUD
         .route("/api/hosts", get(api::hosts::list).post(api::hosts::create))
         .route("/api/hosts/:id", delete(api::hosts::delete).put(api::hosts::rename))
@@ -115,9 +123,20 @@ async fn main() {
         // Kubernetes
         .route("/api/k8s/pods", get(api::k8s::pods))
         .route("/api/k8s/namespaces", get(api::k8s::namespaces))
-        .route("/metrics", get(metrics_handler))
         .route("/ws", get(ws_handler))
-        .with_state(state.clone());
+        // Role gate runs after auth (reads AuthUser); auth runs outermost.
+        .route_layer(middleware::from_fn(auth::enforce_role))
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
+
+    // Public routes — no session required.
+    let public = Router::new()
+        .route("/health", get(health_handler))
+        .route("/api/status", get(status_handler))
+        .route("/api/auth/setup", get(api::auth::setup_status).post(api::auth::setup))
+        .route("/api/auth/login", post(api::auth::login))
+        .route("/metrics", get(metrics_handler));
+
+    let app = public.merge(protected).with_state(state.clone());
 
     let http_addr = format!("0.0.0.0:{}", cfg.http_port);
     let listener = tokio::net::TcpListener::bind(&http_addr)

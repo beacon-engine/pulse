@@ -5,6 +5,15 @@ import type { Environment } from '../types/environments';
 
 export type { Container, ContainerDetail, ContainerEvent, ContainerNetworkInfo, DockerImage, DockerVolume, EnvVar, HardwareMetrics, HostNetwork, K8sNamespace, K8sPod, SavedStack, Stack, SwarmNode, SwarmService, SystemInfo, Environment };
 
+export type Role = 'admin' | 'viewer';
+
+export interface Account {
+  id: string;
+  username: string;
+  role: Role;
+  created_at?: string;
+}
+
 export class BeaconClient {
   private http: AxiosInstance;
 
@@ -12,8 +21,68 @@ export class BeaconClient {
     this.http = axios.create({
       baseURL: '/api',
       headers: { 'Content-Type': 'application/json' },
+      withCredentials: true,
       ...config,
     });
+
+    // Broadcast auth failures so the app can drop back to the login screen.
+    this.http.interceptors.response.use(
+      (r) => r,
+      (err) => {
+        const status = err?.response?.status;
+        const url: string = err?.config?.url ?? '';
+        // Ignore 401s from the auth probes themselves (expected when logged out).
+        if (status === 401 && !url.startsWith('/auth/')) {
+          window.dispatchEvent(new CustomEvent('beacon:unauthorized'));
+        }
+        return Promise.reject(err);
+      },
+    );
+  }
+
+  // ── Auth & users ────────────────────────────────────────────────────────────
+
+  async setupStatus(): Promise<{ needs_setup: boolean }> {
+    const { data } = await this.http.get<{ needs_setup: boolean }>('/auth/setup');
+    return data;
+  }
+
+  async setup(username: string, password: string): Promise<Account> {
+    const { data } = await this.http.post<Account>('/auth/setup', { username, password });
+    return data;
+  }
+
+  async login(username: string, password: string): Promise<Account> {
+    const { data } = await this.http.post<Account>('/auth/login', { username, password });
+    return data;
+  }
+
+  async logout(): Promise<void> {
+    await this.http.post('/auth/logout');
+  }
+
+  async me(): Promise<Account> {
+    const { data } = await this.http.get<Account>('/auth/me');
+    return data;
+  }
+
+  async listUsers(): Promise<Account[]> {
+    const { data } = await this.http.get<Account[]>('/users');
+    return data;
+  }
+
+  async createUser(username: string, password: string, role: Role): Promise<Account> {
+    const { data } = await this.http.post<Account>('/users', { username, password, role });
+    return data;
+  }
+
+  async updateUser(id: string, changes: { role?: Role; password?: string }): Promise<Account> {
+    const { data } = await this.http.put<Account>(`/users/${id}`, changes);
+    return data;
+  }
+
+  async deleteUser(id: string): Promise<void> {
+    await this.http.delete(`/users/${id}`);
   }
 
   // ── Hosts ─────────────────────────────────────────────────────────────────
