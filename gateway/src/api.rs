@@ -4,11 +4,13 @@
 //! database. Anything that touches Docker, Swarm or Kubernetes is resolved to a
 //! `docker_host` connection string and forwarded to the agent over TCP.
 
+pub mod auth;
 pub mod docker;
 pub mod events;
 pub mod hosts;
 pub mod k8s;
 pub mod stacks;
+pub mod users;
 pub mod webhooks;
 
 use axum::http::StatusCode;

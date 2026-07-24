@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use crate::storage::models::{ContainerEvent, Environment, SavedStack};
+use crate::storage::models::{ContainerEvent, Environment, SavedStack, Session, User};
 
 /// Implement this trait to swap the database backend.
 /// The rest of the app depends only on this interface.
@@ -70,4 +70,42 @@ pub trait Repository: Send + Sync {
         entity_key: &str,
         host_id: &str,
     ) -> Result<(), sqlx::Error>;
+
+    // ── Users ─────────────────────────────────────────────────────────────────
+    async fn count_users(&self) -> Result<i64, sqlx::Error>;
+
+    async fn count_admins(&self) -> Result<i64, sqlx::Error>;
+
+    async fn create_user(
+        &self,
+        username: &str,
+        password_hash: &str,
+        role: &str,
+    ) -> Result<String, sqlx::Error>;
+
+    async fn get_user(&self, id: &str) -> Result<Option<User>, sqlx::Error>;
+
+    async fn get_user_by_username(&self, username: &str) -> Result<Option<User>, sqlx::Error>;
+
+    async fn list_users(&self) -> Result<Vec<User>, sqlx::Error>;
+
+    async fn update_user_role(&self, id: &str, role: &str) -> Result<(), sqlx::Error>;
+
+    async fn update_user_password(&self, id: &str, password_hash: &str) -> Result<(), sqlx::Error>;
+
+    async fn delete_user(&self, id: &str) -> Result<(), sqlx::Error>;
+
+    // ── Sessions ────────────────────────────────────────────────────────────────
+    async fn create_session(
+        &self,
+        token: &str,
+        user_id: &str,
+        expires_at: &str,
+    ) -> Result<(), sqlx::Error>;
+
+    async fn get_session(&self, token: &str) -> Result<Option<Session>, sqlx::Error>;
+
+    async fn delete_session(&self, token: &str) -> Result<(), sqlx::Error>;
+
+    async fn delete_user_sessions(&self, user_id: &str) -> Result<(), sqlx::Error>;
 }

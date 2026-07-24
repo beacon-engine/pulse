@@ -1,0 +1,49 @@
+# Full Beacon stack: agent (Docker/Swarm/k8s executor) + gateway (HTTP API + DB)
+# + frontend (nginx). Bring it all up with:  docker compose up -d --build
+#
+# The agent needs the host Docker socket. To also manage Swarm/k8s, run the
+# stack on a Swarm manager / give the agent a kubeconfig (mount it read-only).
+
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: agent
+    image: beacon-agent
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # To manage Kubernetes, uncomment and point at a kubeconfig:
+      # - ${HOME}/.kube/config:/root/.kube/config:ro
+    # No published ports: only the gateway talks to it (internal network).
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: gateway
+    image: beacon-gateway
+    environment:
+      AGENT_ADDR: agent:9000
+      HTTP_PORT: "8080"
+      DATABASE_URL: sqlite:///data/beacon.db
+      # SLACK_WEBHOOK_URL: https://hooks.slack.com/services/...
+    volumes:
+      - beacon-data:/data
+    depends_on:
+      - agent
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    image: beacon-frontend
+    ports:
+      - "8088:80"          # open http://localhost:8088
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
+volumes:
+  beacon-data:

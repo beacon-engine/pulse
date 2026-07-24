@@ -29,6 +29,15 @@ async-trait = "0.1"
 # UUID generation for host / token IDs
 uuid = { version = "1", features = ["v4"] }
 
+# Password hashing
+argon2 = "0.5"
+
+# Cookie extraction / setting for sessions
+axum-extra = { version = "0.9", features = ["cookie"] }
+
+# Cookie Max-Age durations (already in the dep tree via `cookie`)
+time = "0.3"
+
 # Prometheus metrics
 prometheus = "0.13"
 

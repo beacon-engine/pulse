@@ -3,7 +3,9 @@
   import ContainerDrawer from './components/ContainerDrawer.svelte';
   import EnvironmentSelector from './components/EnvironmentSelector.svelte';
   import AddEnvironmentModal from './components/AddEnvironmentModal.svelte';
-  import { api } from './lib/api';
+  import AuthScreen from './components/AuthScreen.svelte';
+  import UsersPage from './pages/UsersPage.svelte';
+  import { api, type Account } from './lib/api';
   import { setAppState } from './lib/appContext';
   import { connect } from './lib/websocket';
   import { currentRoute, initRouter, navigate, type Route } from './lib/router';
@@ -23,6 +25,12 @@
   $effect(() => { document.documentElement.setAttribute('data-theme', theme); });
   function toggleTheme() { theme = theme === 'light' ? 'dark' : 'light'; }
 
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  let account   = $state<Account | null>(null);
+  let authReady = $state(false);
+  let wsDisconnect: (() => void) | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+
   // ── Navigation ────────────────────────────────────────────────────────────
   let route = $state<Route>('containers');
   currentRoute.subscribe(r => route = r);
@@ -36,6 +44,13 @@
     { id: 'resources',  label: 'Resources',  icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>` },
     { id: 'kubernetes', label: 'Kubernetes', icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2L20 6.5V17.5L12 22L4 17.5V6.5L12 2Z"/><path d="M12 22V12M20 6.5L12 12M4 6.5L12 12"/></svg>` },
   ];
+
+  const USERS_NAV: { id: Route; label: string; icon: string } = {
+    id: 'users', label: 'Users',
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13A4 4 0 0 1 16 11"/></svg>`,
+  };
+  // Only admins see the Users section.
+  let navItems = $derived(account?.role === 'admin' ? [...NAV, USERS_NAV] : NAV);
 
   // ── Hosts ─────────────────────────────────────────────────────────────────
   let hosts      = $state<Environment[]>([]);
@@ -209,20 +224,43 @@
     if (route === 'swarm') refreshSwarm();
   });
 
-  onMount(async () => {
-    const stopRouter = initRouter();
+  // ── Boot / teardown (only while authenticated) ─────────────────────────────
+  async function boot() {
     await loadHosts();
     await refresh();
     if (route === 'kubernetes') await refreshK8s();
     if (route === 'swarm') await refreshSwarm();
-    const disconnect = connect(() => refresh());
-    const interval   = setInterval(() => {
+    wsDisconnect = connect(() => refresh());
+    pollTimer = setInterval(() => {
       refresh();
       if (route === 'kubernetes') refreshK8s();
       if (route === 'swarm') refreshSwarm();
     }, 10_000);
+  }
+
+  function teardown() {
+    if (wsDisconnect) { wsDisconnect(); wsDisconnect = null; }
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  async function onAuthed(u: Account) {
+    account = u;
+    authReady = true;
+    await boot();
+  }
+
+  async function logout() {
+    try { await api.logout(); } catch { /* ignore */ }
+    teardown();
+    account = null;
+    if (route === 'users') navigate('containers');
+  }
+
+  onMount(() => {
+    const stopRouter = initRouter();
 
     function onkey(e: KeyboardEvent) {
+      if (!account) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openCmdk(); return; }
       if (e.key === 'Escape') { closeCmdk(); return; }
       if (cmdkOpen) {
@@ -232,9 +270,32 @@
       }
     }
     window.addEventListener('keydown', onkey);
-    return () => { stopRouter(); disconnect(); clearInterval(interval); window.removeEventListener('keydown', onkey); };
+
+    // Drop back to the login screen if any request 401s mid-session.
+    const onUnauth = () => { teardown(); account = null; };
+    window.addEventListener('beacon:unauthorized', onUnauth);
+
+    // Restore an existing session, if any.
+    (async () => {
+      try { account = await api.me(); } catch { account = null; }
+      authReady = true;
+      if (account) await boot();
+    })();
+
+    return () => {
+      stopRouter();
+      teardown();
+      window.removeEventListener('keydown', onkey);
+      window.removeEventListener('beacon:unauthorized', onUnauth);
+    };
   });
 </script>
+
+{#if !authReady}
+  <div class="app-boot">Loading…</div>
+{:else if !account}
+  <AuthScreen onAuthed={onAuthed} />
+{:else}
 
 <!-- ── Drawer ───────────────────────────────────────────────────────────── -->
 {#if state.selectedContainer && state.activeHostId !== null}
@@ -319,7 +380,7 @@
     </div>
 
     <div class="nav-section-label">Monitor</div>
-    {#each NAV as item}
+    {#each navItems as item}
       <button class="nav-item" class:active={route === item.id} onclick={() => navigate(item.id)}>
         {@html item.icon}
         {item.label}
@@ -339,6 +400,18 @@
     />
 
     <div class="sidebar-footer">
+      {#if account}
+        <div class="user-chip">
+          <span class="user-avatar">{account.username.slice(0, 1).toUpperCase()}</span>
+          <div class="user-meta">
+            <div class="user-name">{account.username}</div>
+            <div class="user-role">{account.role}</div>
+          </div>
+          <button class="logout-btn" title="Sign out" onclick={logout} aria-label="Sign out">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/></svg>
+          </button>
+        </div>
+      {/if}
       <div class="version">Beacon v0.1.0</div>
     </div>
   </nav>
@@ -389,10 +462,14 @@
         <SwarmPage />
       {:else if route === 'kubernetes'}
         <KubernetesPage />
+      {:else if route === 'users' && account}
+        <UsersPage me={account} />
       {/if}
     </div>
   </div>
 </div>
+
+{/if}
 
 <style>
   /* ── CSS Design Tokens ────────────────────────────────────────────────── */
@@ -505,6 +582,28 @@
 
   .sidebar-footer { margin-top: auto; border-top: 1px solid var(--border); padding-top: 12px; }
   .version { font-size: 11px; color: var(--mist-2); padding: 6px 12px; }
+
+  .user-chip { display: flex; align-items: center; gap: 9px; padding: 6px 10px 10px; }
+  .user-avatar {
+    width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+    background: var(--accent-tint); color: var(--accent-ink);
+    display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12.5px;
+  }
+  .user-meta { min-width: 0; flex: 1; }
+  .user-name { font-weight: 650; font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .user-role { font-size: 10.5px; color: var(--mist-2); text-transform: capitalize; }
+  .logout-btn {
+    width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--mist); flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; transition: background .15s, color .15s;
+  }
+  .logout-btn:hover { background: var(--surface-2); color: var(--red); }
+  .logout-btn :global(svg) { width: 15px; height: 15px; }
+
+  .app-boot {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: var(--canvas); color: var(--mist); font-size: 14px;
+  }
 
   /* ── Main ────────────────────────────────────────────────────────────── */
   .main { min-width: 0; display: flex; flex-direction: column; }
