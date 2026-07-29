@@ -17,6 +17,17 @@ pub trait Repository: Send + Sync {
 
     async fn list_environments(&self) -> Result<Vec<Environment>, sqlx::Error>;
 
+    /// A page of hosts, optionally filtered by a name search (case-insensitive).
+    async fn list_environments_page(
+        &self,
+        search: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Environment>, sqlx::Error>;
+
+    /// Total host count matching an optional name search.
+    async fn count_environments(&self, search: Option<&str>) -> Result<i64, sqlx::Error>;
+
     async fn get_environment(&self, id: &str) -> Result<Option<Environment>, sqlx::Error>;
 
     async fn create_environment(

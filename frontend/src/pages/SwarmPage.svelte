@@ -2,10 +2,54 @@
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
   import { getAppState } from '../lib/appContext';
+  import type { SwarmService, SwarmTask } from '../types/containers';
 
   const app = getAppState();
 
   let updatingService = $state('');
+
+  // ── Drill-down: tasks (containers) of a service ─────────────────────────────
+  let expandedSvc = $state<Record<string, boolean>>({});
+  let svcTasks = $state<Record<string, SwarmTask[]>>({});
+  let svcTasksLoading = $state<Record<string, boolean>>({});
+  let svcTasksError = $state<Record<string, string>>({});
+
+  async function toggleService(id: string) {
+    const open = !expandedSvc[id];
+    expandedSvc = { ...expandedSvc, [id]: open };
+    if (open && !svcTasks[id]) await loadTasks(id);
+  }
+
+  async function loadTasks(id: string) {
+    if (!app.activeHostId) return;
+    svcTasksLoading = { ...svcTasksLoading, [id]: true };
+    svcTasksError = { ...svcTasksError, [id]: '' };
+    try {
+      svcTasks = { ...svcTasks, [id]: await api.getSwarmServiceTasks(app.activeHostId, id) };
+    } catch (e: any) {
+      svcTasksError = { ...svcTasksError, [id]: e?.response?.data ?? String(e) };
+    } finally {
+      svcTasksLoading = { ...svcTasksLoading, [id]: false };
+    }
+  }
+
+  // Open the container drawer for a task's backing container (local-node tasks).
+  function openTask(svc: SwarmService, t: SwarmTask) {
+    if (!t.container_id) return;
+    app.selectedContainer = {
+      id: t.container_id,
+      name: `${svc.name}.${t.slot}`,
+      image: t.image,
+      state: t.state,
+      status: t.state,
+    };
+  }
+
+  function taskColor(s: string) {
+    if (s === 'running') return 'var(--green)';
+    if (s === 'shutdown' || s === 'failed' || s === 'rejected' || s === 'orphaned') return 'var(--red)';
+    return 'var(--amber)';
+  }
   // Map<serviceId, token | null>
   let serviceTokens = $state<Record<string, string | null>>({});
 
@@ -70,9 +114,12 @@
 
   onMount(() => loadTokens());
 
-  // Reload tokens when services change
+  // Reload tokens only when the *set of services* changes — not on every 10s
+  // poll (which replaces the array with the same ids and caused table jank).
+  let lastSig = '';
   $effect(() => {
-    if (app.swarmServices.length > 0) loadTokens();
+    const sig = app.swarmServices.map(s => s.id).join(',');
+    if (sig && sig !== lastSig) { lastSig = sig; loadTokens(); }
   });
 </script>
 
@@ -110,8 +157,13 @@
         <tbody>
           {#each app.swarmServices as svc (svc.id)}
             {@const token = serviceTokens[svc.id] ?? null}
-            <tr>
-              <td class="cell-mono fw">{svc.name}</td>
+            <tr class:row-open={expandedSvc[svc.id]}>
+              <td class="cell-mono fw">
+                <button class="svc-name-toggle" type="button" onclick={() => toggleService(svc.id)}>
+                  <svg class="chev" class:open={expandedSvc[svc.id]} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>
+                  {svc.name}
+                </button>
+              </td>
               <td class="cell-mono cell-mist">{svc.image.split('@')[0]}</td>
               <td class="cell-mono">{svc.running}/{svc.replicas}</td>
               <td><span class="pill pill-mist">{svc.desired_state || 'running'}</span></td>
@@ -145,6 +197,31 @@
                 </button>
               </td>
             </tr>
+            {#if expandedSvc[svc.id]}
+              <tr class="task-tr">
+                <td colspan="6">
+                  {#if svcTasksLoading[svc.id]}
+                    <div class="task-msg">Loading tasks…</div>
+                  {:else if svcTasksError[svc.id]}
+                    <div class="task-msg err">{svcTasksError[svc.id]}</div>
+                  {:else if (svcTasks[svc.id]?.length ?? 0) === 0}
+                    <div class="task-msg">No tasks for this service</div>
+                  {:else}
+                    <div class="task-list">
+                      {#each svcTasks[svc.id] as t (t.id)}
+                        <button class="task-row" type="button" onclick={() => openTask(svc, t)} disabled={!t.container_id} title={t.container_id ? 'Open container' : 'No container yet'}>
+                          <span class="task-dot" style="background:{taskColor(t.state)}"></span>
+                          <span class="task-name">{svc.name}.{t.slot}</span>
+                          <span class="task-cid">{t.container_id ? t.container_id.slice(0, 12) : '—'}</span>
+                          <span class="task-img">{t.image.split('@')[0]}</span>
+                          <span class="pill {t.state === 'running' ? 'pill-green' : 'pill-red'}">{t.state}</span>
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
+                </td>
+              </tr>
+            {/if}
           {/each}
         </tbody>
       </table>
@@ -262,4 +339,36 @@
   .update-btn svg { width: 13px; height: 13px; }
   .spin { animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Service drill-down */
+  .svc-name-toggle {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: none; border: none; padding: 0; margin: 0; cursor: pointer;
+    font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 700; color: var(--ink);
+  }
+  .svc-name-toggle:hover { color: var(--accent); }
+  .chev { width: 13px; height: 13px; color: var(--mist-2); transition: transform .15s ease; flex-shrink: 0; }
+  .chev.open { transform: rotate(90deg); }
+  :global(tr.row-open td) { background: var(--surface-2); }
+
+  .task-tr :global(td) { padding: 0 18px 12px !important; background: var(--surface-2); }
+  .task-list {
+    display: flex; flex-direction: column;
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    background: var(--surface); overflow: hidden;
+  }
+  .task-row {
+    display: flex; align-items: center; gap: 12px; width: 100%;
+    padding: 9px 12px; border: none; border-bottom: 1px solid var(--border);
+    background: none; cursor: pointer; text-align: left; transition: background .12s;
+  }
+  .task-row:last-child { border-bottom: none; }
+  .task-row:hover:not(:disabled) { background: var(--surface-2); }
+  .task-row:disabled { cursor: default; opacity: .7; }
+  .task-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .task-name { font-weight: 600; font-size: 12.5px; min-width: 140px; }
+  .task-cid { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--mist-2); min-width: 100px; }
+  .task-img { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--mist); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .task-msg { font-size: 12.5px; color: var(--mist); padding: 8px 2px; }
+  .task-msg.err { color: var(--red); }
 </style>

@@ -1,13 +1,16 @@
 use bollard::Docker;
-use bollard::query_parameters::{ListNodesOptions, ListServicesOptions};
+use bollard::query_parameters::{
+    ListNodesOptions, ListServicesOptions, ListTasksOptionsBuilder,
+};
 use bollard::query_parameters::{InspectServiceOptions, UpdateServiceOptionsBuilder};
+use std::collections::HashMap;
 
-pub use protocol::data::orchestration::{SwarmNode, SwarmService};
+pub use protocol::data::orchestration::{SwarmNode, SwarmService, SwarmTask};
 
 pub async fn services(docker: &Docker) -> Result<Vec<SwarmService>, bollard::errors::Error> {
     let opts: Option<ListServicesOptions> = None;
     let list = docker.list_services(opts).await?;
-    Ok(list
+    let mut result = list
         .into_iter()
         .map(|s| {
             let spec = s.spec.as_ref();
@@ -34,13 +37,15 @@ pub async fn services(docker: &Docker) -> Result<Vec<SwarmService>, bollard::err
                 desired_state: "unknown".into(),
             }
         })
-        .collect())
+        .collect::<Vec<_>>();
+    result.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(result)
 }
 
 pub async fn nodes(docker: &Docker) -> Result<Vec<SwarmNode>, bollard::errors::Error> {
     let opts: Option<ListNodesOptions> = None;
     let list = docker.list_nodes(opts).await?;
-    Ok(list
+    let mut result = list
         .into_iter()
         .map(|n| {
             let desc = n.description.clone().unwrap_or_default();
@@ -63,6 +68,46 @@ pub async fn nodes(docker: &Docker) -> Result<Vec<SwarmNode>, bollard::errors::E
                     .map(|a| a.to_string())
                     .unwrap_or_default(),
                 addr: status.addr.unwrap_or_default(),
+            }
+        })
+        .collect::<Vec<_>>();
+    result.sort_by(|a, b| a.hostname.cmp(&b.hostname));
+    Ok(result)
+}
+
+/// Lists the tasks (containers) belonging to a swarm service.
+pub async fn tasks(docker: &Docker, service_id: &str) -> Result<Vec<SwarmTask>, bollard::errors::Error> {
+    let mut filters: HashMap<String, Vec<String>> = HashMap::new();
+    filters.insert("service".to_string(), vec![service_id.to_string()]);
+    let opts = ListTasksOptionsBuilder::new().filters(&filters).build();
+
+    let list = docker.list_tasks(Some(opts)).await?;
+    Ok(list
+        .into_iter()
+        .map(|t| {
+            let status = t.status.as_ref();
+            let state = status
+                .and_then(|s| s.state.as_ref())
+                .map(|s| format!("{s:?}").to_lowercase())
+                .unwrap_or_default();
+            let container_id = status
+                .and_then(|s| s.container_status.as_ref())
+                .and_then(|c| c.container_id.clone())
+                .unwrap_or_default();
+            let image = t
+                .spec
+                .as_ref()
+                .and_then(|sp| sp.container_spec.as_ref())
+                .and_then(|c| c.image.clone())
+                .unwrap_or_default();
+            SwarmTask {
+                id: t.id.unwrap_or_default(),
+                service_id: t.service_id.unwrap_or_default(),
+                node_id: t.node_id.unwrap_or_default(),
+                slot: t.slot.unwrap_or(0),
+                container_id,
+                image,
+                state,
             }
         })
         .collect())

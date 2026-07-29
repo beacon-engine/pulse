@@ -72,6 +72,37 @@ impl Repository for SqliteRepository {
         Ok(rows.iter().map(row_to_env).collect())
     }
 
+    async fn list_environments_page(
+        &self,
+        search: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Environment>, sqlx::Error> {
+        // Local host first, then newest; LIKE is case-insensitive for ASCII.
+        let pattern = format!("%{}%", search.unwrap_or(""));
+        let rows = sqlx::query(
+            "SELECT id, name, docker_host, is_local, created_at FROM environments
+             WHERE name LIKE ?
+             ORDER BY is_local DESC, created_at ASC
+             LIMIT ? OFFSET ?",
+        )
+        .bind(pattern)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(row_to_env).collect())
+    }
+
+    async fn count_environments(&self, search: Option<&str>) -> Result<i64, sqlx::Error> {
+        let pattern = format!("%{}%", search.unwrap_or(""));
+        let row = sqlx::query("SELECT COUNT(*) AS n FROM environments WHERE name LIKE ?")
+            .bind(pattern)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.get::<i64, _>("n"))
+    }
+
     async fn get_environment(&self, id: &str) -> Result<Option<Environment>, sqlx::Error> {
         let row = sqlx::query(
             "SELECT id, name, docker_host, is_local, created_at FROM environments WHERE id = ?",

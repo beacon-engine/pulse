@@ -9,14 +9,14 @@ use axum::{
 };
 
 use crate::agent::unexpected;
-use crate::api::resolve_docker_host;
+use crate::api::{paginate, resolve_docker_host, Page, PageQuery};
 use crate::observability::alerts;
 use crate::state::AppState;
 
 use protocol::data::container::{
     ContainerDetail, ContainerInfo, ContainerNetworkInfo, HostNetwork, ImageInfo, Stack, VolumeInfo,
 };
-use protocol::data::orchestration::{SwarmNode, SwarmService};
+use protocol::data::orchestration::{SwarmNode, SwarmService, SwarmTask};
 use protocol::data::system::{HardwareMetrics, SystemInfo};
 use protocol::protocol::request::{EnvBody, ExecBody, LogsQuery, NetworkBody, RecreateBody};
 use protocol::wire::{Request, Response};
@@ -248,12 +248,27 @@ pub async fn get_hardware_metrics(
 pub async fn list_images(
     State(state): State<AppState>,
     Path(host_id): Path<String>,
-) -> Result<Json<Vec<ImageInfo>>, ApiError> {
+    Query(q): Query<PageQuery>,
+) -> Result<Json<Page<ImageInfo>>, ApiError> {
     let docker_host = resolve_docker_host(&state, &host_id).await?;
-    match state.agent.call(Request::ListImages { docker_host }).await {
-        Response::Images(v) => Ok(Json(v)),
-        other => Err(unexpected(other)),
-    }
+    let all = match state.agent.call(Request::ListImages { docker_host }).await {
+        Response::Images(v) => v,
+        other => return Err(unexpected(other)),
+    };
+    let (page, per_page) = q.bounds();
+    let mut filtered: Vec<ImageInfo> = match q.search_term() {
+        None => all,
+        Some(s) => all
+            .into_iter()
+            .filter(|i| {
+                i.id.to_lowercase().contains(&s)
+                    || i.tags.iter().any(|t| t.to_lowercase().contains(&s))
+            })
+            .collect(),
+    };
+    // Newest first, so paging is stable across requests.
+    filtered.sort_by(|a, b| b.created.cmp(&a.created));
+    Ok(Json(paginate(filtered, page, per_page)))
 }
 
 pub async fn delete_image(
@@ -283,12 +298,23 @@ pub async fn prune_images(
 pub async fn list_volumes(
     State(state): State<AppState>,
     Path(host_id): Path<String>,
-) -> Result<Json<Vec<VolumeInfo>>, ApiError> {
+    Query(q): Query<PageQuery>,
+) -> Result<Json<Page<VolumeInfo>>, ApiError> {
     let docker_host = resolve_docker_host(&state, &host_id).await?;
-    match state.agent.call(Request::ListVolumes { docker_host }).await {
-        Response::Volumes(v) => Ok(Json(v)),
-        other => Err(unexpected(other)),
-    }
+    let all = match state.agent.call(Request::ListVolumes { docker_host }).await {
+        Response::Volumes(v) => v,
+        other => return Err(unexpected(other)),
+    };
+    let (page, per_page) = q.bounds();
+    let mut filtered: Vec<VolumeInfo> = match q.search_term() {
+        None => all,
+        Some(s) => all
+            .into_iter()
+            .filter(|v| v.name.to_lowercase().contains(&s) || v.driver.to_lowercase().contains(&s))
+            .collect(),
+    };
+    filtered.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(Json(paginate(filtered, page, per_page)))
 }
 
 pub async fn delete_volume(
@@ -359,6 +385,17 @@ pub async fn list_nodes(
     let docker_host = resolve_docker_host(&state, &host_id).await?;
     match state.agent.call(Request::ListSwarmNodes { docker_host }).await {
         Response::SwarmNodes(v) => Ok(Json(v)),
+        other => Err(unexpected(other)),
+    }
+}
+
+pub async fn list_service_tasks(
+    State(state): State<AppState>,
+    Path((host_id, service_id)): Path<(String, String)>,
+) -> Result<Json<Vec<SwarmTask>>, ApiError> {
+    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    match state.agent.call(Request::ListSwarmTasks { docker_host, service_id }).await {
+        Response::SwarmTasks(v) => Ok(Json(v)),
         other => Err(unexpected(other)),
     }
 }

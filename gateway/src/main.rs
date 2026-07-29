@@ -95,6 +95,7 @@ async fn main() {
         .route("/api/hosts/:host_id/stacks", get(api::stacks::list).post(api::stacks::create))
         .route("/api/hosts/:host_id/stacks/detected", get(api::docker::list_stacks))
         .route("/api/hosts/:host_id/swarm/services", get(api::docker::list_services))
+        .route("/api/hosts/:host_id/swarm/services/:service_id/tasks", get(api::docker::list_service_tasks))
         .route("/api/hosts/:host_id/swarm/nodes", get(api::docker::list_nodes))
         // Webhook execution endpoints
         .route("/api/webhooks/:host_id/:container_id/recreate", post(api::webhooks::recreate_container))
@@ -122,6 +123,7 @@ async fn main() {
         .route("/api/prometheus/query", get(prometheus_proxy::query))
         // Kubernetes
         .route("/api/k8s/pods", get(api::k8s::pods))
+        .route("/api/k8s/pods/:namespace/:name", delete(api::k8s::delete_pod))
         .route("/api/k8s/namespaces", get(api::k8s::namespaces))
         .route("/ws", get(ws_handler))
         // Role gate runs after auth (reads AuthUser); auth runs outermost.

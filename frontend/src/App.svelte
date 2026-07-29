@@ -5,6 +5,7 @@
   import AddEnvironmentModal from './components/AddEnvironmentModal.svelte';
   import AuthScreen from './components/AuthScreen.svelte';
   import UsersPage from './pages/UsersPage.svelte';
+  import HostsPage from './pages/HostsPage.svelte';
   import { api, type Account } from './lib/api';
   import { setAppState } from './lib/appContext';
   import { connect } from './lib/websocket';
@@ -53,10 +54,16 @@
   let navItems = $derived(account?.role === 'admin' ? [...NAV, USERS_NAV] : NAV);
 
   // ── Hosts ─────────────────────────────────────────────────────────────────
-  let hosts      = $state<Environment[]>([]);
+  // `hosts` is only the compact list shown in the sidebar (first page). The full,
+  // paginated list lives on the Hosts page. `activeHostObj` keeps the active host
+  // resolvable even when it isn't in the sidebar page.
+  const SIDEBAR_HOSTS = 8;
+  let hosts        = $state<Environment[]>([]);
+  let totalHosts   = $state(0);
   let activeHostId = $state<string | null>(null);
+  let activeHostObj = $state<Environment | null>(null);
   let showAddHost  = $state(false);
-  let activeHost   = $derived(hosts.find(h => h.id === activeHostId) ?? null);
+  let activeHost   = $derived(hosts.find(h => h.id === activeHostId) ?? activeHostObj);
 
   // ── Data ──────────────────────────────────────────────────────────────────
   let containers = $state<Container[]>([]);
@@ -151,18 +158,25 @@
     }
   }
 
-  async function switchHost(id: string) {
-    if (id === activeHostId) return;
-    activeHostId = id; loading = true;
+  async function switchHost(host: Environment) {
+    activeHostObj = host; // keep resolvable even if not in the sidebar page
+    // Ensure the selected host is visible in the compact sidebar list.
+    if (!hosts.some(h => h.id === host.id)) hosts = [host, ...hosts].slice(0, SIDEBAR_HOSTS);
+    if (host.id === activeHostId) return;
+    activeHostId = host.id; loading = true;
     containers = []; stacks = []; state.selectedContainer = null;
     await refresh();
   }
 
   async function loadHosts() {
     try {
-      hosts = await api.listHosts();
-      if (activeHostId === null && hosts.length > 0)
-        activeHostId = (hosts.find(h => h.is_local) ?? hosts[0]).id;
+      const p = await api.listHosts({ perPage: SIDEBAR_HOSTS });
+      hosts = p.items; totalHosts = p.total;
+      if (activeHostId === null && hosts.length > 0) {
+        const initial = hosts.find(h => h.is_local) ?? hosts[0];
+        activeHostId = initial.id;
+        activeHostObj = initial;
+      }
     } catch (e) { error = String(e); }
   }
 
@@ -392,11 +406,13 @@
 
     <EnvironmentSelector
       {hosts}
+      total={totalHosts}
       activeId={activeHostId}
       onselect={switchHost}
       onadd={() => (showAddHost = true)}
       ondelete={deleteHost}
       onrename={renameHost}
+      onseeall={() => navigate('hosts')}
     />
 
     <div class="sidebar-footer">
@@ -422,7 +438,7 @@
     <!-- Topbar -->
     <div class="topbar">
       <div class="topbar-left">
-        <h1>{NAV.find(n => n.id === route)?.label ?? ''}</h1>
+        <h1>{navItems.find(n => n.id === route)?.label ?? (route === 'hosts' ? 'Hosts' : '')}</h1>
         <div class="topbar-sub">
           {activeHost?.name ?? ''}
           {lastUpdated ? ` · updated ${lastUpdated}` : ''}
@@ -464,6 +480,8 @@
         <KubernetesPage />
       {:else if route === 'users' && account}
         <UsersPage me={account} />
+      {:else if route === 'hosts'}
+        <HostsPage />
       {/if}
     </div>
   </div>
@@ -700,4 +718,6 @@
   .toast-ok   .toast-ic { background: var(--green); }
   .toast-warn .toast-ic { background: var(--amber); }
   .toast-err  .toast-ic { background: var(--red); }
+  .text-sm { font-size: 1.2rem; }
+  .text-right { text-align: right; }
 </style>

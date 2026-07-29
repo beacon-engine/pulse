@@ -2,9 +2,17 @@
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
   import { getAppState } from '../lib/appContext';
+  import Pagination from '../components/Pagination.svelte';
   import type { DockerImage, DockerVolume, HostNetwork, SystemInfo } from '../types/containers';
 
   const app = getAppState();
+  const PER_PAGE = 50;
+
+  // Debounce helper for search inputs.
+  function debounce(fn: () => void, ms = 300) {
+    let t: ReturnType<typeof setTimeout>;
+    return () => { clearTimeout(t); t = setTimeout(fn, ms); };
+  }
 
   type Tab = 'images' | 'volumes' | 'networks' | 'system';
   const TABS: Tab[] = ['images', 'volumes', 'networks', 'system'];
@@ -25,16 +33,25 @@
 
   // ── Images ────────────────────────────────────────────────────────────────
   let images   = $state<DockerImage[]>([]);
+  let imgTotal = $state(0);
+  let imgPage  = $state(1);
+  let imgSearch = $state('');
   let imgError = $state('');
   let imgBusy  = $state(false);
 
   async function loadImages() {
     if (!app.activeHostId) return;
     imgBusy = true; imgError = '';
-    try { images = await api.getImages(app.activeHostId); }
+    try {
+      const p = await api.getImages(app.activeHostId, { page: imgPage, perPage: PER_PAGE, search: imgSearch });
+      images = p.items; imgTotal = p.total;
+    }
     catch (e: any) { imgError = String(e); }
     finally { imgBusy = false; }
   }
+
+  const onImgSearch = debounce(() => { imgPage = 1; loadImages(); });
+  function gotoImgPage(p: number) { imgPage = p; loadImages(); }
 
   async function deleteImage(id: string) {
     if (!app.activeHostId) return;
@@ -56,16 +73,25 @@
 
   // ── Volumes ───────────────────────────────────────────────────────────────
   let volumes  = $state<DockerVolume[]>([]);
+  let volTotal = $state(0);
+  let volPage  = $state(1);
+  let volSearch = $state('');
   let volError = $state('');
   let volBusy  = $state(false);
 
   async function loadVolumes() {
     if (!app.activeHostId) return;
     volBusy = true; volError = '';
-    try { volumes = await api.getVolumes(app.activeHostId); }
+    try {
+      const p = await api.getVolumes(app.activeHostId, { page: volPage, perPage: PER_PAGE, search: volSearch });
+      volumes = p.items; volTotal = p.total;
+    }
     catch (e: any) { volError = String(e); }
     finally { volBusy = false; }
   }
+
+  const onVolSearch = debounce(() => { volPage = 1; loadVolumes(); });
+  function gotoVolPage(p: number) { volPage = p; loadVolumes(); }
 
   async function deleteVolume(name: string) {
     if (!app.activeHostId) return;
@@ -127,11 +153,9 @@
     return new Date(ts * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
   }
 
+  // Dangling stats reflect the current page (the server sorts + paginates).
   let danglingCount = $derived(images.filter(i => i.dangling).length);
   let danglingSize  = $derived(images.filter(i => i.dangling).reduce((a, i) => a + i.size, 0));
-
-  // Sorted copies — never mutate the reactive $state arrays directly
-  let sortedImages  = $derived([...images].sort((a, b) => b.created - a.created));
 
   onMount(() => {
     if (app.activeHostId) loadImages();
@@ -178,18 +202,19 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/></svg>
         Refresh
       </button>
+      <input class="search-box" placeholder="Search images…" bind:value={imgSearch} oninput={onImgSearch} />
       {#if imgBusy}<span class="loading-hint">Loading…</span>{/if}
     </div>
     {#if imgError}<div class="err-box">{imgError}</div>{/if}
     {#if images.length === 0 && !imgBusy}
-      <div class="empty-hint">No images found</div>
+      <div class="empty-hint">{imgSearch ? 'No images match your search' : 'No images found'}</div>
     {:else}
       <table class="res-table">
         <thead>
           <tr><th>ID</th><th>Tags / Status</th><th>Size</th><th>Created</th><th></th></tr>
         </thead>
         <tbody>
-          {#each sortedImages as img (img.id)}
+          {#each images as img (img.id)}
             <tr class:dangling-row={img.dangling}>
               <td class="mono small id-cell">{img.id.replace('sha256:', '').slice(0, 12)}</td>
               <td>
@@ -214,6 +239,7 @@
           {/each}
         </tbody>
       </table>
+      <Pagination page={imgPage} perPage={PER_PAGE} total={imgTotal} onpage={gotoImgPage} />
     {/if}
 
   <!-- VOLUMES -->
@@ -227,11 +253,12 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/></svg>
         Refresh
       </button>
+      <input class="search-box" placeholder="Search volumes…" bind:value={volSearch} oninput={onVolSearch} />
       {#if volBusy}<span class="loading-hint">Loading…</span>{/if}
     </div>
     {#if volError}<div class="err-box">{volError}</div>{/if}
     {#if volumes.length === 0 && !volBusy}
-      <div class="empty-hint">No volumes found</div>
+      <div class="empty-hint">{volSearch ? 'No volumes match your search' : 'No volumes found'}</div>
     {:else}
       <table class="res-table">
         <thead><tr><th>Name</th><th>Driver</th><th>Mount point</th><th>Created</th><th></th></tr></thead>
@@ -251,6 +278,7 @@
           {/each}
         </tbody>
       </table>
+      <Pagination page={volPage} perPage={PER_PAGE} total={volTotal} onpage={gotoVolPage} />
     {/if}
 
   <!-- NETWORKS -->
@@ -337,6 +365,12 @@
 
   /* Toolbar */
   .tab-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
+  .search-box {
+    margin-left: auto; padding: 6px 11px; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); background: var(--surface-2); color: var(--ink);
+    font-size: 12.5px; font-family: inherit; outline: none; min-width: 200px;
+  }
+  .search-box:focus { border-color: var(--accent); background: var(--surface); }
   .btn-danger {
     display: inline-flex; align-items: center; gap: 6px; padding: 7px 13px;
     border-radius: var(--radius-sm); border: 1px solid var(--red);

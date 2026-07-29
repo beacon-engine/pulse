@@ -1,10 +1,10 @@
 import { writable } from 'svelte/store';
 
-export type Route = 'containers' | 'stacks' | 'events' | 'kubernetes' | 'swarm' | 'metrics' | 'resources' | 'users';
+export type Route = 'containers' | 'stacks' | 'events' | 'kubernetes' | 'swarm' | 'metrics' | 'resources' | 'users' | 'hosts';
 
 function readHash(): Route {
   const hash = window.location.hash.replace('#/', '').replace('#', '') as Route;
-  const valid: Route[] = ['containers', 'stacks', 'events', 'kubernetes', 'swarm', 'metrics', 'resources', 'users'];
+  const valid: Route[] = ['containers', 'stacks', 'events', 'kubernetes', 'swarm', 'metrics', 'resources', 'users', 'hosts'];
   return valid.indexOf(hash) !== -1 ? hash : 'containers';
 }
 

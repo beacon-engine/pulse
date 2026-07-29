@@ -33,7 +33,7 @@ pub async fn list(docker: &Docker) -> Result<Vec<ContainerInfo>, bollard::errors
         .list_containers(Some(ListContainersOptions { all: true, filters: Some(filters), ..Default::default() }))
         .await?;
 
-    Ok(containers
+    let mut result: Vec<ContainerInfo> = containers
         .into_iter()
         .map(|c| {
             let stack = c.labels.as_ref().and_then(|l| {
@@ -57,7 +57,11 @@ pub async fn list(docker: &Docker) -> Result<Vec<ContainerInfo>, bollard::errors
                 stack,
             }
         })
-        .collect())
+        .collect();
+
+    // Stable ordering so 10s UI refreshes don't reshuffle rows.
+    result.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(result)
 }
 
 // ── Inspect ───────────────────────────────────────────────────────────────────
@@ -420,7 +424,7 @@ pub async fn prune_volumes(docker: &Docker) -> Result<i64, bollard::errors::Erro
 
 pub async fn list_host_networks(docker: &Docker) -> Result<Vec<HostNetwork>, bollard::errors::Error> {
     let nets = docker.list_networks(None::<bollard::query_parameters::ListNetworksOptions>).await?;
-    Ok(nets
+    let mut result: Vec<HostNetwork> = nets
         .into_iter()
         .map(|n| HostNetwork {
             id: n.id.unwrap_or_default(),
@@ -429,7 +433,9 @@ pub async fn list_host_networks(docker: &Docker) -> Result<Vec<HostNetwork>, bol
             scope: n.scope.unwrap_or_default(),
             internal: n.internal.unwrap_or(false),
         })
-        .collect())
+        .collect();
+    result.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(result)
 }
 
 pub async fn get_container_networks(
@@ -537,7 +543,123 @@ pub fn hardware_metrics() -> HardwareMetrics {
     HardwareMetrics { mem_used, mem_total, mem_pct, disks: disk_metrics() }
 }
 
+/// Chooses the disk collector honestly:
+///
+/// - containerized **with** `HOST_ROOT` → read the host's real disks through the
+///   bind-mount;
+/// - containerized **without** `HOST_ROOT` → we can only see the container's own
+///   overlay filesystem, which is misleading, so report nothing;
+/// - **not** containerized (bare-metal) → `sysinfo` sees the real machine.
+///
+/// Note: on Docker Desktop (Windows/macOS) the "host" is the Docker Linux VM, not
+/// the physical machine. To monitor a Windows/macOS host, run the agent natively.
 fn disk_metrics() -> Vec<DiskInfo> {
+    let host_root = std::env::var("HOST_ROOT").unwrap_or_default();
+
+    if !host_root.is_empty() && host_root != "/" {
+        return host_disk_metrics(&host_root);
+    }
+
+    if in_container() {
+        eprintln!(
+            "host disk metrics unavailable: running in a container without HOST_ROOT. \
+             Bind-mount the host (-v /:/host:ro) and set HOST_ROOT=/host to enable them."
+        );
+        return Vec::new();
+    }
+
+    local_disk_metrics()
+}
+
+/// Best-effort detection of whether we're running inside a container.
+fn in_container() -> bool {
+    std::path::Path::new("/.dockerenv").exists()
+        || std::path::Path::new("/run/.containerenv").exists()
+}
+
+/// Reads the host's mounts (via `HOST_ROOT/proc/*/mounts`) and `statvfs`'s each
+/// real filesystem through the bind-mount. Used when the agent runs in a
+/// container with the host mounted read-only at `HOST_ROOT` (e.g. `-v /:/host:ro`).
+fn host_disk_metrics(root: &str) -> Vec<DiskInfo> {
+    use std::collections::HashMap;
+
+    // Pseudo/virtual filesystems we never want to report.
+    const SKIP_FS: &[&str] = &[
+        "proc", "sysfs", "tmpfs", "devtmpfs", "devpts", "cgroup", "cgroup2", "overlay",
+        "squashfs", "mqueue", "fusectl", "debugfs", "tracefs", "bpf", "configfs", "pstore",
+        "securityfs", "ramfs", "autofs", "binfmt_misc", "nsfs", "hugetlbfs", "fuse.lxcfs",
+    ];
+
+    // The host mount table. Prefer PID 1's table (the host mount namespace);
+    // fall back to the generic file, then to the local collector.
+    let mounts = std::fs::read_to_string(format!("{root}/proc/1/mounts"))
+        .or_else(|_| std::fs::read_to_string(format!("{root}/proc/mounts")));
+    let Ok(mounts) = mounts else { return local_disk_metrics() };
+
+    // Deduplicate by (total, available) — bind mounts report identical stats.
+    let mut best: HashMap<(u64, u64), (i32, DiskInfo)> = HashMap::new();
+
+    for line in mounts.lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.len() < 3 {
+            continue;
+        }
+        let device = f[0];
+        let mount = f[1].replace("\\040", " "); // octal-escaped spaces in /proc/mounts
+        let fstype = f[2];
+
+        if SKIP_FS.contains(&fstype) {
+            continue;
+        }
+        // Real block devices, plus common network/pooled filesystems.
+        let is_real = device.starts_with("/dev/")
+            || matches!(fstype, "zfs" | "nfs" | "nfs4" | "cifs" | "ceph");
+        if !is_real {
+            continue;
+        }
+
+        // The host path as seen from inside the container: HOST_ROOT + mount.
+        let path = if mount == "/" { root.to_string() } else { format!("{root}{mount}") };
+        let Some((total, available)) = statvfs_bytes(&path) else { continue };
+        if total < 1_000_000_000 {
+            continue; // skip < 1 GB
+        }
+
+        let used = total.saturating_sub(available);
+        let pct = if total > 0 { used as f32 / total as f32 * 100.0 } else { 0.0 };
+        let info = DiskInfo { name: device.to_string(), mount: mount.clone(), total, used, pct };
+
+        let priority: i32 = if mount == "/" { 100 } else { 10 };
+        let key = (total, available);
+        let entry = best.entry(key).or_insert((priority, info.clone()));
+        if priority > entry.0 {
+            *entry = (priority, info);
+        }
+    }
+
+    let mut result: Vec<DiskInfo> = best.into_values().map(|(_, d)| d).collect();
+    result.sort_by(|a, b| b.total.cmp(&a.total));
+    result
+}
+
+/// `statvfs(path)` → `(total_bytes, available_bytes)`, or `None` on error.
+fn statvfs_bytes(path: &str) -> Option<(u64, u64)> {
+    let c_path = std::ffi::CString::new(path).ok()?;
+    // SAFETY: `c_path` is a valid NUL-terminated string; `stat` is zeroed and
+    // only read after a successful (0) return.
+    unsafe {
+        let mut stat: libc::statvfs = std::mem::zeroed();
+        if libc::statvfs(c_path.as_ptr(), &mut stat) != 0 {
+            return None;
+        }
+        let frsize = stat.f_frsize as u64;
+        let total = (stat.f_blocks as u64).saturating_mul(frsize);
+        let available = (stat.f_bavail as u64).saturating_mul(frsize);
+        Some((total, available))
+    }
+}
+
+fn local_disk_metrics() -> Vec<DiskInfo> {
     use sysinfo::Disks;
     use std::collections::HashMap;
 

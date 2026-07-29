@@ -185,6 +185,46 @@ and a Docker socket.
 > `stack up/down`). The **gateway** image embeds its SQL migrations at compile
 > time, so it's a single self-contained binary.
 
+### Host metrics from inside a container
+
+The agent's hardware metrics come from the machine it runs on:
+
+- **CPU** — reported by the Docker daemon (`docker info`), so it's always the host.
+- **Memory** — `/proc/meminfo` is not namespaced, so it already reflects the host.
+- **Disk** — by default `sysinfo` would only see the container's overlay
+  filesystem. To report the **host's** real disks, bind-mount the host
+  read-only and set `HOST_ROOT` (the `docker-compose.yml` does this):
+
+  ```yaml
+  volumes:
+    - /:/host:ro
+  environment:
+    HOST_ROOT: /host
+  ```
+
+  With `HOST_ROOT` set, the agent reads the host mount table and `statvfs`'s each
+  real filesystem through the bind-mount. Running bare-metal (not in a
+  container), it uses `sysinfo` on the real machine. Running in a container
+  *without* `HOST_ROOT`, it reports **no** disks rather than the container's
+  (misleading) overlay filesystem.
+
+#### OS / platform support for host metrics
+
+A container can only ever see itself or, with a bind-mount, the host it shares a
+kernel with. That has real limits:
+
+| Where the agent runs | Host metrics |
+| --- | --- |
+| Bare-metal (Linux/macOS/Windows), run directly | ✅ Real machine (`sysinfo`) |
+| Linux container on a **Linux** host + `HOST_ROOT` | ✅ Real host |
+| **Docker Desktop** (Windows/macOS) | ⚠️ Only the Docker **Linux VM** — never the physical machine, even with `-v /:/host` |
+| **Native Windows containers** (Windows Server) | ❌ The Linux agent binary can't run there |
+
+**To monitor a Windows or macOS host, run the agent natively** (not in a
+container). Docker/Swarm/Kubernetes management still works fine from a
+containerized agent everywhere — this limitation only affects **host hardware
+metrics** (disk/memory), because those come from the OS the agent process sees.
+
 ---
 
 ## Authentication & Security
