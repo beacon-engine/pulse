@@ -16,7 +16,7 @@ use crate::data::container::{
     ContainerDetail, ContainerInfo, ContainerNetworkInfo, HostNetwork, ImageInfo, PortMap, Stack,
     VolumeInfo,
 };
-use crate::data::orchestration::{NamespaceInfo, PodInfo, SwarmNode, SwarmService};
+use crate::data::orchestration::{NamespaceInfo, PodInfo, SwarmNode, SwarmService, SwarmTask};
 use crate::data::system::{HardwareMetrics, SystemInfo};
 
 /// Everything the agent needs to run `docker compose` for a stack without a
@@ -85,6 +85,8 @@ pub enum Request {
     // ── Swarm ─────────────────────────────────────────────────────────────────────
     ListSwarmServices { docker_host: String },
     ListSwarmNodes { docker_host: String },
+    /// Tasks (containers) belonging to a swarm service.
+    ListSwarmTasks { docker_host: String, service_id: String },
     /// Force a rolling update of a swarm service (bump force_update).
     UpdateSwarmService { docker_host: String, service_id: String },
 
@@ -92,6 +94,7 @@ pub enum Request {
     K8sPods,
     K8sNamespaces,
     K8sRollout { namespace: String, deployment: String },
+    K8sDeletePod { namespace: String, name: String },
 
     // ── Event stream ──────────────────────────────────────────────────────────────
     /// Opens a long-lived stream: the agent replies with a sequence of
@@ -135,6 +138,7 @@ pub enum Response {
     DetectedStacks(Vec<Stack>),
     SwarmServices(Vec<SwarmService>),
     SwarmNodes(Vec<SwarmNode>),
+    SwarmTasks(Vec<SwarmTask>),
     Pods(Vec<PodInfo>),
     Namespaces(Vec<NamespaceInfo>),
     /// One frame of a [`Request::WatchEvents`] stream.

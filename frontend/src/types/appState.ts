@@ -24,7 +24,7 @@ export interface AppState {
   refresh: () => Promise<void>;
   refreshK8s: () => Promise<void>;
   refreshSwarm: () => Promise<void>;
-  switchHost: (id: string) => Promise<void>;
+  switchHost: (host: Environment) => Promise<void>;
   startContainer: (id: string) => Promise<void>;
   stopContainer: (id: string) => Promise<void>;
   restartContainer: (id: string) => Promise<void>;

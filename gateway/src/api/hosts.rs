@@ -1,11 +1,12 @@
 //! Host (formerly "environment") CRUD — served entirely from the gateway DB.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
 
+use crate::api::{Page, PageQuery};
 use crate::state::AppState;
 use crate::storage::models::Environment;
 
@@ -13,13 +14,22 @@ pub use protocol::protocol::request::{CreateHostBody, RenameHostBody};
 
 pub async fn list(
     State(state): State<AppState>,
-) -> Result<Json<Vec<Environment>>, (StatusCode, String)> {
-    state
+    Query(q): Query<PageQuery>,
+) -> Result<Json<Page<Environment>>, (StatusCode, String)> {
+    let (page, per_page) = q.bounds();
+    let search = q.search_term();
+    let total = state
         .db
-        .list_environments()
+        .count_environments(search.as_deref())
         .await
-        .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))? as usize;
+    let offset = ((page - 1) * per_page) as i64;
+    let items = state
+        .db
+        .list_environments_page(search.as_deref(), per_page as i64, offset)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(Page { items, total, page, per_page }))
 }
 
 pub async fn create(

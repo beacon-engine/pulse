@@ -468,10 +468,10 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
               </button>
             </div>
-            <div class="env-row">
+            <!-- <div class="env-row">
               <span class="env-key">{key}</span>
               <span class="env-val" class:redacted={sensitive}>{sensitive ? '••••••••' : val}</span>
-            </div>
+            </div> -->
           {/each}
         </div>
         <button class="btn-ghost btn-sm" onclick={addEnv} style="margin-top:8px">

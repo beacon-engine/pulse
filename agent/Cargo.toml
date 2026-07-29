@@ -30,6 +30,8 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # System hardware metrics
 sysinfo = "0.32"
+# statvfs() for reading host disk usage through a bind-mount (containerized runs)
+libc = "0.2"
 dotenvy = "0.15.7"
 
 # Shared gateway <-> agent wire types

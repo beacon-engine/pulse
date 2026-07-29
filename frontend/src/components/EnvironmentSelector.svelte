@@ -4,17 +4,21 @@
   let {
     hosts,
     activeId,
+    total,
     onselect,
     onadd,
     ondelete,
     onrename,
+    onseeall,
   }: {
     hosts: Environment[];
     activeId: string | null;
-    onselect: (id: string) => void;
+    total: number;
+    onselect: (host: Environment) => void;
     onadd: () => void;
     ondelete: (id: string) => void;
     onrename: (id: string, name: string) => void;
+    onseeall: () => void;
   } = $props();
 
   let editingId = $state<string | null>(null);
@@ -42,9 +46,15 @@
 <div class="host-section">
   <div class="section-label">Hosts</div>
 
+  {#if total > hosts.length}
+    <button class="see-all" onclick={onseeall}>See all hosts ({total})</button>
+  {:else}
+    <button class="see-all" onclick={onseeall}>Manage hosts</button>
+  {/if}
+
   {#each hosts as host (host.id)}
     <div class="host-row" class:active={host.id === activeId}>
-      <button class="host-btn" onclick={() => onselect(host.id)}>
+      <button class="host-btn" onclick={() => onselect(host)}>
         <span class="dot" class:local={host.is_local}></span>
         {#if editingId === host.id}
           <!-- svelte-ignore a11y-autofocus -->
@@ -133,4 +143,11 @@
     transition: border-color .15s, color .15s;
   }
   .add-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .see-all {
+    display: block; width: auto; margin: 8px 12px 0; padding: 6px 10px;
+    background: none; border: none; border-radius: var(--radius-sm);
+    color: var(--accent-ink); font-size: 12px; font-weight: 650; cursor: pointer;
+    transition: background .12s;
+  }
+  .see-all:hover { background: var(--accent-tint); }
 </style>

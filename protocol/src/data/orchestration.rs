@@ -24,7 +24,30 @@ pub struct SwarmNode {
     pub addr: String,
 }
 
+/// A single task (running container) belonging to a swarm service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwarmTask {
+    pub id: String,
+    pub service_id: String,
+    pub node_id: String,
+    pub slot: i64,
+    /// The container backing this task (may be empty before it's scheduled).
+    pub container_id: String,
+    pub image: String,
+    pub state: String,
+}
+
 // ── Kubernetes ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PodContainer {
+    pub name: String,
+    pub image: String,
+    pub ready: bool,
+    pub restart_count: i32,
+    /// running | waiting | terminated | unknown
+    pub state: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PodInfo {
@@ -32,6 +55,7 @@ pub struct PodInfo {
     pub namespace: String,
     pub status: String,
     pub ready: bool,
+    pub containers: Vec<PodContainer>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

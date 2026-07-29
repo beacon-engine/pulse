@@ -5,6 +5,19 @@
 
   const app = getAppState();
 
+  // ── Drill-down: containers belonging to a saved stack ───────────────────────
+  let expandedStacks = $state<Record<string, boolean>>({});
+  function toggleStack(id: string) {
+    expandedStacks = { ...expandedStacks, [id]: !expandedStacks[id] };
+  }
+  // Compose sets the project label to the `-p` name, which is the stack name.
+  function stackContainers(name: string) {
+    return app.containers.filter((c) => c.stack === name);
+  }
+  function stateColor(s: string) {
+    return s === 'running' ? 'var(--green)' : s === 'exited' ? 'var(--red)' : 'var(--amber)';
+  }
+
   // ── Editor state ──────────────────────────────────────────────────────────
   let showStackEditor = $state(false);
   let editingStack    = $state<SavedStack | null>(null);
@@ -149,13 +162,15 @@
       {#each app.savedStacks as s (s.id)}
         <div class="saved-stack-card">
           <div class="saved-stack-hdr">
-            <div class="stack-title-row">
+            <button class="stack-title-row stack-toggle" type="button" onclick={() => toggleStack(s.id)}>
+              <svg class="chev" class:open={expandedStacks[s.id]} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>
               <span class="saved-stack-name">{s.name}</span>
               <span class="saved-stack-status pill {s.status === 'running' ? 'pill-green' : 'pill-mist'}">{s.status}</span>
               {#if s.env_vars && JSON.parse(s.env_vars).length > 0}
                 <span class="pill pill-blue" title="Has environment variables">{JSON.parse(s.env_vars).length} env</span>
               {/if}
-            </div>
+              <span class="child-count">{stackContainers(s.name).length} container{stackContainers(s.name).length !== 1 ? 's' : ''}</span>
+            </button>
             <div class="saved-stack-actions">
               <button class="btn-ghost btn-sm" onclick={() => runStackUp(s.id)} disabled={stackOpBusy}>Start</button>
               <button class="btn-ghost btn-sm" onclick={() => runStackDown(s.id)} disabled={stackOpBusy}>Stop</button>
@@ -188,6 +203,23 @@
           </div>
 
           <div class="saved-stack-meta">Updated {new Date(s.updated_at).toLocaleString()}</div>
+
+          {#if expandedStacks[s.id]}
+            <div class="child-list">
+              {#if stackContainers(s.name).length === 0}
+                <div class="child-empty">No running containers — start the stack to see them here</div>
+              {:else}
+                {#each stackContainers(s.name) as c (c.id)}
+                  <button class="child-row" type="button" onclick={() => (app.selectedContainer = c)}>
+                    <span class="child-dot" style="background:{stateColor(c.state)}"></span>
+                    <span class="child-name">{c.name}</span>
+                    <span class="child-img">{c.image}</span>
+                    <span class="child-stat pill {c.state === 'running' ? 'pill-green' : 'pill-red'}">{c.state}</span>
+                  </button>
+                {/each}
+              {/if}
+            </div>
+          {/if}
         </div>
       {/each}
     </div>
@@ -299,6 +331,28 @@
   .saved-stack-status { font-size: 11px; }
   .saved-stack-actions { display: flex; gap: 6px; flex-shrink: 0; }
   .saved-stack-meta { font-size: 11.5px; color: var(--mist-2); margin-top: 10px; }
+
+  /* Drill-down toggle + child container rows (shared look with Swarm) */
+  .stack-toggle {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    background: none; border: none; padding: 0; margin: 0; cursor: pointer;
+    text-align: left; flex: 1; min-width: 0;
+  }
+  .chev { width: 14px; height: 14px; color: var(--mist-2); transition: transform .15s ease; flex-shrink: 0; }
+  .chev.open { transform: rotate(90deg); }
+  .child-count { font-size: 11.5px; color: var(--mist-2); }
+  .child-list { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 4px; }
+  .child-empty { padding: 12px 4px; font-size: 12.5px; color: var(--mist-2); }
+  .child-row {
+    display: flex; align-items: center; gap: 12px; width: 100%;
+    padding: 9px 8px; border: none; background: none; cursor: pointer;
+    text-align: left; border-radius: 7px; transition: background .12s;
+  }
+  .child-row:hover { background: var(--surface-2); }
+  .child-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .child-name { font-weight: 600; font-size: 13px; min-width: 150px; }
+  .child-img { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--mist); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .child-stat { font-size: 11px; flex-shrink: 0; }
 
   /* Webhook row */
   .webhook-row { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }

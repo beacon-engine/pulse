@@ -1,9 +1,20 @@
 import axios from 'axios';
 import type { AxiosInstance, CreateAxiosDefaults } from 'axios';
-import type { Container, ContainerDetail, ContainerEvent, ContainerNetworkInfo, DockerImage, DockerVolume, EnvVar, HardwareMetrics, HostNetwork, K8sNamespace, K8sPod, SavedStack, Stack, SwarmNode, SwarmService, SystemInfo } from '../types/containers';
+import type { Container, ContainerDetail, ContainerEvent, ContainerNetworkInfo, DockerImage, DockerVolume, EnvVar, HardwareMetrics, HostNetwork, K8sNamespace, K8sPod, Page, SavedStack, Stack, SwarmNode, SwarmService, SwarmTask, SystemInfo } from '../types/containers';
 import type { Environment } from '../types/environments';
 
-export type { Container, ContainerDetail, ContainerEvent, ContainerNetworkInfo, DockerImage, DockerVolume, EnvVar, HardwareMetrics, HostNetwork, K8sNamespace, K8sPod, SavedStack, Stack, SwarmNode, SwarmService, SystemInfo, Environment };
+export type { Container, ContainerDetail, ContainerEvent, ContainerNetworkInfo, DockerImage, DockerVolume, EnvVar, HardwareMetrics, HostNetwork, K8sNamespace, K8sPod, Page, SavedStack, Stack, SwarmNode, SwarmService, SwarmTask, SystemInfo, Environment };
+
+/// Options for paginated list endpoints.
+export interface PageOpts { page?: number; perPage?: number; search?: string; }
+
+function pageParams(o?: PageOpts): Record<string, string | number> {
+  const p: Record<string, string | number> = {};
+  if (o?.page) p.page = o.page;
+  if (o?.perPage) p.per_page = o.perPage;
+  if (o?.search) p.search = o.search;
+  return p;
+}
 
 export type Role = 'admin' | 'viewer';
 
@@ -25,9 +36,23 @@ export class BeaconClient {
       ...config,
     });
 
-    // Broadcast auth failures so the app can drop back to the login screen.
+    // Guard against the API proxy pointing at the wrong server: a JSON endpoint
+    // that comes back as HTML (e.g. another container's index page) would
+    // otherwise be handed to callers as a string and blow up with cryptic
+    // ".slice/.find of undefined" errors. Reject it with a clear message.
     this.http.interceptors.response.use(
-      (r) => r,
+      (r) => {
+        const wantsText = r.config.responseType === 'text';
+        const contentType = String(r.headers?.['content-type'] ?? '');
+        if (!wantsText && contentType.includes('text/html')) {
+          return Promise.reject(
+            new Error(
+              'Gateway returned HTML instead of JSON — the /api proxy is pointing at the wrong server. Is the Beacon gateway running on the proxied port?',
+            ),
+          );
+        }
+        return r;
+      },
       (err) => {
         const status = err?.response?.status;
         const url: string = err?.config?.url ?? '';
@@ -87,8 +112,8 @@ export class BeaconClient {
 
   // ── Hosts ─────────────────────────────────────────────────────────────────
 
-  async listHosts(): Promise<Environment[]> {
-    const { data } = await this.http.get<Environment[]>('/hosts');
+  async listHosts(opts?: PageOpts): Promise<Page<Environment>> {
+    const { data } = await this.http.get<Page<Environment>>('/hosts', { params: pageParams(opts) });
     return data;
   }
 
@@ -201,8 +226,8 @@ export class BeaconClient {
     return data;
   }
 
-  async getImages(hostId: string): Promise<DockerImage[]> {
-    const { data } = await this.http.get<DockerImage[]>(`/hosts/${hostId}/images`);
+  async getImages(hostId: string, opts?: PageOpts): Promise<Page<DockerImage>> {
+    const { data } = await this.http.get<Page<DockerImage>>(`/hosts/${hostId}/images`, { params: pageParams(opts) });
     return data;
   }
 
@@ -215,8 +240,8 @@ export class BeaconClient {
     return data;
   }
 
-  async getVolumes(hostId: string): Promise<DockerVolume[]> {
-    const { data } = await this.http.get<DockerVolume[]>(`/hosts/${hostId}/volumes`);
+  async getVolumes(hostId: string, opts?: PageOpts): Promise<Page<DockerVolume>> {
+    const { data } = await this.http.get<Page<DockerVolume>>(`/hosts/${hostId}/volumes`, { params: pageParams(opts) });
     return data;
   }
 
@@ -301,6 +326,11 @@ export class BeaconClient {
     return data;
   }
 
+  async getSwarmServiceTasks(hostId: string, serviceId: string): Promise<SwarmTask[]> {
+    const { data } = await this.http.get<SwarmTask[]>(`/hosts/${hostId}/swarm/services/${serviceId}/tasks`);
+    return data;
+  }
+
   // ── Webhooks ─────────────────────────────────────────────────────────────────
 
   async webhookRecreate(hostId: string, containerId: string, pull = false): Promise<{ id: string; pulled: boolean }> {
@@ -349,6 +379,10 @@ export class BeaconClient {
   async getK8sNamespaces(): Promise<K8sNamespace[]> {
     const { data } = await this.http.get<K8sNamespace[]>('/k8s/namespaces');
     return data;
+  }
+
+  async deleteK8sPod(namespace: string, name: string): Promise<void> {
+    await this.http.delete(`/k8s/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`);
   }
 }
 

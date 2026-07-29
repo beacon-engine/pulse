@@ -7,6 +7,14 @@ export interface Container {
   stack?: string;
 }
 
+/// A page of results from a paginated list endpoint.
+export interface Page<T> {
+  items: T[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
 export enum ContainerFilterStatus {
   All = 'all',
   Running = 'running',
@@ -79,11 +87,20 @@ export interface SavedStack {
   updated_at: string;
 }
 
+export interface PodContainer {
+  name: string;
+  image: string;
+  ready: boolean;
+  restart_count: number;
+  state: string;
+}
+
 export interface K8sPod {
   name: string;
   namespace: string;
   status: string;
   ready: boolean;
+  containers: PodContainer[];
 }
 
 export interface K8sNamespace {
@@ -107,6 +124,16 @@ export interface SwarmNode {
   state: string;
   availability: string;
   addr: string;
+}
+
+export interface SwarmTask {
+  id: string;
+  service_id: string;
+  node_id: string;
+  slot: number;
+  container_id: string;
+  image: string;
+  state: string;
 }
 
 export interface HostNetwork {

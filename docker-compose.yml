@@ -13,8 +13,15 @@ services:
     image: beacon-agent
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      # Host filesystem (read-only) so disk metrics reflect the real host, not
+      # the container's overlay. Recursive by default, so /host/proc and other
+      # partitions are visible.
+      - /:/host:ro
       # To manage Kubernetes, uncomment and point at a kubeconfig:
       # - ${HOME}/.kube/config:/root/.kube/config:ro
+    environment:
+      # Tells the agent to read host disks/mounts under this path.
+      HOST_ROOT: /host
     # No published ports: only the gateway talks to it (internal network).
     restart: unless-stopped
 

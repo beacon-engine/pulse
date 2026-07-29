@@ -17,12 +17,30 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::RwLock;
 
 use protocol::wire::{read_frame, write_frame, Request, Response};
 
 struct AppState {
     docker: Arc<manager::DockerManager>,
-    k8s: Option<kube::Client>,
+    /// Cached Kubernetes client, connected lazily so a kubeconfig that appears
+    /// after startup is picked up without restarting the agent.
+    k8s: Arc<RwLock<Option<kube::Client>>>,
+}
+
+/// Returns a Kubernetes client, connecting (and caching) on first use or if a
+/// previous startup attempt failed. `None` when no cluster is reachable.
+async fn k8s_client(state: &AppState) -> Option<kube::Client> {
+    if let Some(c) = state.k8s.read().await.as_ref() {
+        return Some(c.clone());
+    }
+    match kubernetes::connect().await {
+        Ok(c) => {
+            *state.k8s.write().await = Some(c.clone());
+            Some(c)
+        }
+        Err(_) => None,
+    }
 }
 
 #[tokio::main]
@@ -31,16 +49,15 @@ async fn main() {
 
     let cfg = config::Config::from_env();
 
-    let k8s = match kubernetes::connect().await {
+    // Best-effort initial connect; if it fails we retry lazily per request.
+    let k8s = Arc::new(RwLock::new(None));
+    match kubernetes::connect().await {
         Ok(client) => {
             println!("Kubernetes connected");
-            Some(client)
+            *k8s.write().await = Some(client);
         }
-        Err(e) => {
-            println!("Kubernetes unavailable ({e}), skipping");
-            None
-        }
-    };
+        Err(e) => println!("Kubernetes not connected yet ({e}); will retry on demand"),
+    }
 
     let state = Arc::new(AppState {
         docker: Arc::new(manager::DockerManager::new()),
@@ -338,6 +355,13 @@ async fn dispatch(state: &AppState, req: Request) -> Response {
                 Err(e) => exec_error(e),
             }
         }
+        Request::ListSwarmTasks { docker_host, service_id } => {
+            let d = docker!(docker_host);
+            match swarm::tasks(&d, &service_id).await {
+                Ok(v) => Response::SwarmTasks(v),
+                Err(e) => exec_error(e),
+            }
+        }
         Request::UpdateSwarmService { docker_host, service_id } => {
             let d = docker!(docker_host);
             match swarm::force_update(&d, &service_id).await {
@@ -347,23 +371,30 @@ async fn dispatch(state: &AppState, req: Request) -> Response {
         }
 
         // ── Kubernetes ───────────────────────────────────────────────────────────
-        Request::K8sPods => match &state.k8s {
+        Request::K8sPods => match k8s_client(state).await {
             None => k8s_unavailable(),
-            Some(c) => match kubernetes::list_pods(c).await {
+            Some(c) => match kubernetes::list_pods(&c).await {
                 Ok(v) => Response::Pods(v),
                 Err(e) => exec_error(e),
             },
         },
-        Request::K8sNamespaces => match &state.k8s {
+        Request::K8sNamespaces => match k8s_client(state).await {
             None => k8s_unavailable(),
-            Some(c) => match kubernetes::list_namespaces(c).await {
+            Some(c) => match kubernetes::list_namespaces(&c).await {
                 Ok(v) => Response::Namespaces(v),
                 Err(e) => exec_error(e),
             },
         },
-        Request::K8sRollout { namespace, deployment } => match &state.k8s {
+        Request::K8sRollout { namespace, deployment } => match k8s_client(state).await {
             None => k8s_unavailable(),
-            Some(c) => match kubernetes::rollout(c, &namespace, &deployment).await {
+            Some(c) => match kubernetes::rollout(&c, &namespace, &deployment).await {
+                Ok(()) => Response::Ok,
+                Err(e) => exec_error(e),
+            },
+        },
+        Request::K8sDeletePod { namespace, name } => match k8s_client(state).await {
+            None => k8s_unavailable(),
+            Some(c) => match kubernetes::delete_pod(&c, &namespace, &name).await {
                 Ok(()) => Response::Ok,
                 Err(e) => exec_error(e),
             },
