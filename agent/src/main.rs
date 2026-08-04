@@ -1,4 +1,4 @@
-//! Beacon agent — a stateless executor.
+//! Pulse agent — a stateless executor.
 //!
 //! The agent owns Docker, Docker Swarm and Kubernetes access. It listens on a
 //! TCP socket and answers [`Request`]s from the gateway with [`Response`]s. It
@@ -45,7 +45,7 @@ async fn k8s_client(state: &AppState) -> Option<kube::Client> {
 
 #[tokio::main]
 async fn main() {
-    println!("Starting Beacon agent v0.1.0");
+    println!("Starting Pulse agent v0.1.0");
 
     let cfg = config::Config::from_env();
 
@@ -69,7 +69,7 @@ async fn main() {
         .await
         .unwrap_or_else(|_| panic!("Failed to bind to TCP port {}", cfg.port));
 
-    println!("Beacon agent listening on tcp://{addr}");
+    println!("Pulse agent listening on tcp://{addr}");
 
     loop {
         let (socket, peer) = match listener.accept().await {

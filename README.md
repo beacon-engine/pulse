@@ -1,13 +1,13 @@
-# Beacon
+# Pulse
 
 **A lightweight, high-performance container management platform with native observability**
 
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## What is Beacon?
+## What is Pulse?
 
-Beacon is a modern alternative to Portainer, built in Rust to manage Docker,
+Pulse is a modern alternative to Portainer, built in Rust to manage Docker,
 Docker Swarm, and Kubernetes from one dashboard with first-class observability
 and alerting.
 
@@ -20,7 +20,7 @@ and alerting.
 
 ## Architecture
 
-Beacon is three Rust crates plus a Svelte frontend:
+Pulse is three Rust crates plus a Svelte frontend:
 
 ```
 ┌──────────┐   HTTP/JSON    ┌───────────┐   TCP (framed)   ┌─────────┐   Docker API   ┌────────┐
@@ -37,7 +37,7 @@ Beacon is three Rust crates plus a Svelte frontend:
   alerting, the Prometheus proxy, WebSocket fan-out, and metrics. It holds **no**
   Docker access itself — it resolves each host to a `docker_host` connection
   string and forwards the operation to the agent.
-- **`agent/`** — a **stateless executor** (crate `beacon-core`) that owns Docker,
+- **`agent/`** — a **stateless executor** (crate `pulse-core`) that owns Docker,
   Docker Swarm, and Kubernetes access. It listens on a **binary TCP** protocol
   (not HTTP) and answers `Request`s from the gateway with `Response`s. It keeps
   no database.
@@ -123,7 +123,7 @@ cd frontend && npm install && npm run dev   # http://localhost:9003
 Open **http://localhost:9003**. On first run you'll be asked to **create an admin
 account** (this is the setup step). After that, log in with those credentials.
 
-> Starting fresh: the gateway stores everything in `gateway/beacon.db`. Delete
+> Starting fresh: the gateway stores everything in `gateway/pulse.db`. Delete
 > that file to reset all users/hosts/stacks.
 
 ### Environment variables
@@ -134,7 +134,7 @@ account** (this is the setup step). After that, log in with those credentials.
 |----------|---------|-------------|
 | `HTTP_PORT` | `8080` | HTTP port the dashboard/API is served on |
 | `AGENT_ADDR` | `127.0.0.1:9000` | TCP address of the agent |
-| `DATABASE_URL` | `sqlite://beacon.db` | SQLite path (or Postgres URL) |
+| `DATABASE_URL` | `sqlite://pulse.db` | SQLite path (or Postgres URL) |
 | `SLACK_WEBHOOK_URL` | — | Slack incoming webhook for alerts |
 
 **Agent**
@@ -157,7 +157,7 @@ docker compose up -d --build
 # dashboard → http://localhost:8088
 ```
 
-This builds three images — `beacon-agent`, `beacon-gateway`, `beacon-frontend` —
+This builds three images — `pulse-agent`, `pulse-gateway`, `pulse-frontend` —
 and wires them together. The agent mounts the host Docker socket; the gateway
 keeps its SQLite DB in a named volume. To manage Kubernetes, uncomment the
 kubeconfig mount in `docker-compose.yml`.
@@ -168,14 +168,14 @@ kubeconfig mount in `docker-compose.yml`.
 DOCKER_USER=youruser
 
 # Backend (two targets from the root Dockerfile)
-docker build --target agent   -t $DOCKER_USER/beacon-agent:latest   .
-docker build --target gateway -t $DOCKER_USER/beacon-gateway:latest .
+docker build --target agent   -t $DOCKER_USER/pulse-agent:latest   .
+docker build --target gateway -t $DOCKER_USER/pulse-gateway:latest .
 # Frontend
-docker build -t $DOCKER_USER/beacon-frontend:latest ./frontend
+docker build -t $DOCKER_USER/pulse-frontend:latest ./frontend
 
-docker push $DOCKER_USER/beacon-agent:latest
-docker push $DOCKER_USER/beacon-gateway:latest
-docker push $DOCKER_USER/beacon-frontend:latest
+docker push $DOCKER_USER/pulse-agent:latest
+docker push $DOCKER_USER/pulse-gateway:latest
+docker push $DOCKER_USER/pulse-frontend:latest
 ```
 
 Consumers then only need `docker-compose.yml` (pointed at your pushed images)
@@ -234,7 +234,7 @@ metrics** (disk/memory), because those come from the OS the agent process sees.
 - **First-run setup**: with no users, the dashboard forces creation of the first
   account, which becomes an **admin**.
 - **Login** issues an opaque, DB-backed session token in an `HttpOnly` cookie
-  (`beacon_session`, 7-day expiry). Passwords are hashed with **Argon2**.
+  (`pulse_session`, 7-day expiry). Passwords are hashed with **Argon2**.
 - **Roles**: `admin` (full access + user management) and `viewer` (read-only —
   any state-changing request is rejected with `403`).
 - **User management** at `/api/users` (admin only), with guards against deleting
@@ -289,7 +289,7 @@ by host and workload — reproduce your own:*
 ```bash
 # start the stack, then:
 GATEWAY_PORT=8080 AGENT_PORT=9000 LOAD=1 ./scripts/benchmark.sh 30
-# add BEACON_COOKIE="beacon_session=<token>" to include an authed endpoint under load
+# add PULSE_COOKIE="pulse_session=<token>" to include an authed endpoint under load
 ```
 
 The whole backend sits comfortably under **~40 MB RSS** combined at idle.

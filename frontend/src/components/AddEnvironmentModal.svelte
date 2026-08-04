@@ -42,7 +42,7 @@
     </div>
 
     <p class="hint">
-      Connect Beacon to a remote Docker host. The daemon must be accessible over
+      Connect Pulse to a remote Docker host. The daemon must be accessible over
       TCP — e.g.&nbsp;<code>tcp://192.168.1.10:2375</code>.
     </p>
 

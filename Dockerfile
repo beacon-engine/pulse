@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1
 #
-# Multi-target build for the Beacon backend. Produces two images from one
+# Multi-target build for the Pulse backend. Produces two images from one
 # builder stage:
-#   docker build --target agent   -t <user>/beacon-agent   .
-#   docker build --target gateway -t <user>/beacon-gateway .
+#   docker build --target agent   -t <user>/pulse-agent   .
+#   docker build --target gateway -t <user>/pulse-gateway .
 #
 # The frontend has its own image — see frontend/Dockerfile.
 
@@ -49,7 +49,7 @@ COPY --from=builder /build/gateway/target/release/gateway /usr/local/bin/gateway
 WORKDIR /data
 ENV HTTP_PORT=8080 \
     AGENT_ADDR=agent:9000 \
-    DATABASE_URL=sqlite:///data/beacon.db
+    DATABASE_URL=sqlite:///data/pulse.db
 EXPOSE 8080
 VOLUME ["/data"]
 ENTRYPOINT ["gateway"]

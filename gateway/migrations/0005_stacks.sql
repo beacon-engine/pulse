@@ -1,4 +1,4 @@
--- Persisted Docker Compose / stack definitions managed by Beacon.
+-- Persisted Docker Compose / stack definitions managed by Pulse.
 CREATE TABLE stacks (
     id          TEXT PRIMARY KEY NOT NULL,
     host_id     TEXT NOT NULL,

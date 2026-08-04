@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Measure CPU% and resident memory (RSS) of the Beacon agent and gateway, at
+# Measure CPU% and resident memory (RSS) of the Pulse agent and gateway, at
 # idle and (optionally) under light HTTP load. Prints a Markdown table you can
 # paste into the README.
 #
@@ -12,7 +12,7 @@
 #   AGENT_PORT     TCP port of the agent     (default 9000)
 #   GATEWAY_URL    base URL for load probes  (default http://localhost:$GATEWAY_PORT)
 #   LOAD           1 = generate request load, 0 = measure idle (default 1)
-#   BEACON_COOKIE  optional "beacon_session=..." to hit an authed endpoint
+#   PULSE_COOKIE  optional "pulse_session=..." to hit an authed endpoint
 #
 # Works on macOS and Linux (uses `ps` and `lsof`).
 
@@ -23,7 +23,7 @@ GATEWAY_PORT="${GATEWAY_PORT:-8080}"
 AGENT_PORT="${AGENT_PORT:-9000}"
 GATEWAY_URL="${GATEWAY_URL:-http://localhost:${GATEWAY_PORT}}"
 LOAD="${LOAD:-1}"
-COOKIE="${BEACON_COOKIE:-}"
+COOKIE="${PULSE_COOKIE:-}"
 
 pid_on_port() { lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | head -1; }
 

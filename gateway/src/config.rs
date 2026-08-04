@@ -22,7 +22,7 @@ impl Config {
             agent_addr: std::env::var("AGENT_ADDR")
                 .unwrap_or_else(|_| "127.0.0.1:9000".to_string()),
             database_url: std::env::var("DATABASE_URL")
-                .unwrap_or_else(|_| "sqlite://beacon.db".to_string()),
+                .unwrap_or_else(|_| "sqlite://pulse.db".to_string()),
         }
     }
 }

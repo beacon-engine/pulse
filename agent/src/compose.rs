@@ -8,7 +8,7 @@ use protocol::wire::ComposeStack;
 
 fn project_dir(stack: &ComposeStack) -> PathBuf {
     let mut dir = std::env::temp_dir();
-    dir.push("beacon-stacks");
+    dir.push("pulse-stacks");
     dir.push(&stack.id);
     dir
 }

@@ -16,7 +16,7 @@ use chrono::{Duration, Utc};
 
 use crate::state::AppState;
 
-pub const SESSION_COOKIE: &str = "beacon_session";
+pub const SESSION_COOKIE: &str = "pulse_session";
 pub const SESSION_TTL_DAYS: i64 = 7;
 
 /// The authenticated user, injected into request extensions by [`require_auth`]

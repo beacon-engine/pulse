@@ -49,7 +49,7 @@ async fn handle_event(state: &AppState, frame: EventFrame) {
             let exit_code = frame.exit_code.as_deref().unwrap_or("?");
             let msg = if exit_code != "0" {
                 Some(format!(
-                    ":red_circle: *Beacon* — container `{}` crashed (exit code {})",
+                    ":red_circle: *Pulse* — container `{}` crashed (exit code {})",
                     frame.container_name, exit_code
                 ))
             } else {
@@ -60,7 +60,7 @@ async fn handle_event(state: &AppState, frame: EventFrame) {
         "oom" => (
             "oom",
             Some(format!(
-                ":rotating_light: *Beacon* — container `{}` was OOM-killed",
+                ":rotating_light: *Pulse* — container `{}` was OOM-killed",
                 frame.container_name
             )),
         ),

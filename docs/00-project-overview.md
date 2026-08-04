@@ -1,4 +1,4 @@
-# Project Overview: Beacon
+# Project Overview: Pulse
 
 ## Vision
 
@@ -23,9 +23,9 @@ No built-in notifications for crashes, deployments, or policy violations. Teams 
 ### 5. **Performance at Scale**
 Managing hundreds of clusters becomes slow and cumbersome. Fleet-level visibility is lacking.
 
-## The Beacon Solution
+## The Pulse Solution
 
-Beacon addresses these gaps with a modern, purpose-built platform:
+Pulse addresses these gaps with a modern, purpose-built platform:
 
 ### Core Principles
 
@@ -68,7 +68,7 @@ Beacon addresses these gaps with a modern, purpose-built platform:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        Beacon Core                          │
+│                        Pulse Core                          │
 │                      (Rust Backend)                         │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
@@ -89,7 +89,7 @@ Beacon addresses these gaps with a modern, purpose-built platform:
                             │
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                   Beacon UI (Svelte)                        │
+│                   Pulse UI (Svelte)                        │
 │                                                             │
 │  • Real-time container status                              │
 │  • Fleet-level dashboards                                  │
@@ -109,7 +109,7 @@ Beacon addresses these gaps with a modern, purpose-built platform:
 
 ## MVP Scope (Phase 1)
 
-The first version of Beacon will focus on core functionality:
+The first version of Pulse will focus on core functionality:
 
 1. **Docker container management** - Start, stop, restart, view logs
 2. **Basic Kubernetes connectivity** - List pods, deployments, services
@@ -120,7 +120,7 @@ The first version of Beacon will focus on core functionality:
 
 ## Success Metrics
 
-Beacon will be considered successful if it achieves:
+Pulse will be considered successful if it achieves:
 
 - **50% smaller memory footprint** than Portainer
 - **Sub-100ms API response times** for common operations
@@ -141,7 +141,7 @@ Beacon will be considered successful if it achieves:
 
 ## Competitive Positioning
 
-| Feature | Portainer | Rancher | Beacon |
+| Feature | Portainer | Rancher | Pulse |
 |---------|-----------|---------|--------|
 | Memory Footprint | ~200MB | ~500MB | **<100MB (target)** |
 | GitOps Reconciliation | ❌ | ⚠️ (via Fleet) | ✅ Native |
@@ -183,4 +183,4 @@ Beacon will be considered successful if it achieves:
 2. Learn Rust fundamentals ([Rust Basics](./02-rust-basics.md))
 3. Build your first component ([Hello World Server](./03-hello-world-server.md))
 
-Let's build Beacon! 🚀
+Let's build Pulse! 🚀

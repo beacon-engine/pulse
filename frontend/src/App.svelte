@@ -287,7 +287,7 @@
 
     // Drop back to the login screen if any request 401s mid-session.
     const onUnauth = () => { teardown(); account = null; };
-    window.addEventListener('beacon:unauthorized', onUnauth);
+    window.addEventListener('pulse:unauthorized', onUnauth);
 
     // Restore an existing session, if any.
     (async () => {
@@ -300,7 +300,7 @@
       stopRouter();
       teardown();
       window.removeEventListener('keydown', onkey);
-      window.removeEventListener('beacon:unauthorized', onUnauth);
+      window.removeEventListener('pulse:unauthorized', onUnauth);
     };
   });
 </script>
@@ -388,7 +388,7 @@
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M3 16L12 20L21 16M3 12L12 16L21 12M12 3L21 8L12 13L3 8L12 3Z" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </div>
       <div>
-        <div class="brand-name">Beacon</div>
+        <div class="brand-name">Pulse</div>
         <div class="brand-sub">Fleet Console</div>
       </div>
     </div>
@@ -428,7 +428,7 @@
           </button>
         </div>
       {/if}
-      <div class="version">Beacon v0.1.0</div>
+      <div class="version">Pulse v0.1.0</div>
     </div>
   </nav>
 

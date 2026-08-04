@@ -97,10 +97,10 @@
     return samples.filter(s => s.name === name);
   }
 
-  let uptime = $derived(getSample('beacon_uptime_seconds'));
-  let containersTotal = $derived(getSample('beacon_containers_total'));
-  let requestSamples = $derived(getSamples('beacon_http_requests_total'));
-  let eventSamples = $derived(getSamples('beacon_container_events_total'));
+  let uptime = $derived(getSample('pulse_uptime_seconds'));
+  let containersTotal = $derived(getSample('pulse_containers_total'));
+  let requestSamples = $derived(getSamples('pulse_http_requests_total'));
+  let eventSamples = $derived(getSamples('pulse_container_events_total'));
   let totalRequests = $derived(requestSamples.reduce((a, s) => a + s.value, 0));
 
   function fmtUptime(s: number | null): string {
@@ -119,7 +119,7 @@
   }
 
   // ── External Prometheus ───────────────────────────────────────────────────
-  let promUrl    = $state(localStorage.getItem('beacon-prom-url') ?? '');
+  let promUrl    = $state(localStorage.getItem('pulse-prom-url') ?? '');
   let promQuery  = $state('');
   let promResult = $state<unknown>(null);
   let promError  = $state('');
@@ -133,7 +133,7 @@
   ];
 
   $effect(() => {
-    if (promUrl) localStorage.setItem('beacon-prom-url', promUrl);
+    if (promUrl) localStorage.setItem('pulse-prom-url', promUrl);
   });
 
   async function runPromQuery() {
@@ -193,7 +193,7 @@
   <div class="err-box" style="margin-bottom:18px">{hwError}</div>
 {/if}
 
-<!-- Beacon own metrics -->
+<!-- Pulse own metrics -->
 <div class="metrics-grid">
   <div class="m-card accent">
     <div class="m-label">Uptime</div>

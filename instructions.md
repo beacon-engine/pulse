@@ -1,10 +1,10 @@
-# Beacon
+# Pulse
 
 **A lightweight, high-performance container orchestration platform with native observability**
 
 ---
 
-## Background: Why Beacon?
+## Background: Why Pulse?
 
 Based on the latest developments in the Portainer ecosystem, including the release of version 2.39 LTS, the most significant missing enterprise feature has just been introduced: **Fleet Governance Policies**. However, looking at user feedback and competitor analysis, there are several other critical gaps that enterprise users still face when scaling.
 

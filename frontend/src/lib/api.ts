@@ -25,7 +25,7 @@ export interface Account {
   created_at?: string;
 }
 
-export class BeaconClient {
+export class PulseClient {
   private http: AxiosInstance;
 
   constructor(config: CreateAxiosDefaults = {}) {
@@ -47,7 +47,7 @@ export class BeaconClient {
         if (!wantsText && contentType.includes('text/html')) {
           return Promise.reject(
             new Error(
-              'Gateway returned HTML instead of JSON — the /api proxy is pointing at the wrong server. Is the Beacon gateway running on the proxied port?',
+              'Gateway returned HTML instead of JSON — the /api proxy is pointing at the wrong server. Is the Pulse gateway running on the proxied port?',
             ),
           );
         }
@@ -58,7 +58,7 @@ export class BeaconClient {
         const url: string = err?.config?.url ?? '';
         // Ignore 401s from the auth probes themselves (expected when logged out).
         if (status === 401 && !url.startsWith('/auth/')) {
-          window.dispatchEvent(new CustomEvent('beacon:unauthorized'));
+          window.dispatchEvent(new CustomEvent('pulse:unauthorized'));
         }
         return Promise.reject(err);
       },
@@ -386,4 +386,4 @@ export class BeaconClient {
   }
 }
 
-export const api = new BeaconClient();
+export const api = new PulseClient();
