@@ -1,6 +1,6 @@
 # Development Setup
 
-This guide will help you set up your development environment for building Beacon. We'll install Rust, essential tools, and configure your IDE for the best development experience.
+This guide will help you set up your development environment for building Pulse. We'll install Rust, essential tools, and configure your IDE for the best development experience.
 
 ## Prerequisites
 
@@ -191,7 +191,7 @@ cargo watch -x run
 A typical Rust project looks like this:
 
 ```
-beacon/
+pulse/
 ├── Cargo.toml          # Project metadata and dependencies
 ├── Cargo.lock          # Locked dependency versions (auto-generated)
 ├── src/
@@ -204,7 +204,7 @@ beacon/
 
 ## Step 7: Install Docker (for testing)
 
-Beacon manages Docker containers, so you'll need Docker installed.
+Pulse manages Docker containers, so you'll need Docker installed.
 
 ### macOS
 ```bash

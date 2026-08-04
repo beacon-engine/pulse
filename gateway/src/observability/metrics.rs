@@ -22,17 +22,17 @@ pub fn init() {
     START_TIME.get_or_init(Instant::now);
     METRICS.get_or_init(|| Metrics {
         http_requests_total: register_counter_vec!(
-            "beacon_http_requests_total",
+            "pulse_http_requests_total",
             "Total number of HTTP requests",
             &["method", "endpoint", "status"]
         )
         .expect("Failed to register http_requests_total"),
         containers_total: register_int_gauge!(
-            "beacon_containers_total",
+            "pulse_containers_total",
             "Number of containers known to Docker"
         )
         .expect("Failed to register containers_total"),
-        uptime_seconds: register_gauge!("beacon_uptime_seconds", "Seconds since Beacon started")
+        uptime_seconds: register_gauge!("pulse_uptime_seconds", "Seconds since Pulse started")
             .expect("Failed to register uptime_seconds"),
     });
 }
@@ -55,11 +55,11 @@ static EVENTS: OnceLock<prometheus::CounterVec> = OnceLock::new();
 pub fn init_events_counter() {
     EVENTS.get_or_init(|| {
         register_counter_vec!(
-            "beacon_container_events_total",
-            "Container lifecycle events recorded by Beacon",
+            "pulse_container_events_total",
+            "Container lifecycle events recorded by Pulse",
             &["event"]
         )
-        .expect("Failed to register beacon_container_events_total")
+        .expect("Failed to register pulse_container_events_total")
     });
 }
 

@@ -1,8 +1,8 @@
-# Testing Beacon against Swarm & Kubernetes locally
+# Testing Pulse against Swarm & Kubernetes locally
 
-Beacon talks to three orchestrators through the **agent**:
+Pulse talks to three orchestrators through the **agent**:
 
-| System          | How the agent reaches it                          | Beacon features |
+| System          | How the agent reaches it                          | Pulse features |
 | --------------- | ------------------------------------------------- | --------------- |
 | Docker          | Docker Engine API (`bollard`) via socket/TCP      | containers, images, volumes, networks, logs, exec, stacks |
 | Docker Swarm    | same Docker socket, Swarm API                     | services, nodes, force rolling update |
@@ -27,7 +27,7 @@ containers, so a single-node swarm is the cleanest isolated test bed.
 docker swarm init
 #   → "Swarm initialized: current node (xxxx) is now a manager."
 
-# Deploy something so Beacon's Swarm page has data
+# Deploy something so Pulse's Swarm page has data
 docker service create --name web --replicas 3 -p 8081:80 nginx:alpine
 docker service create --name redis redis:7-alpine
 
@@ -36,7 +36,7 @@ docker service ls
 docker node ls
 ```
 
-In Beacon: open the **Swarm** page for your local host — you should see the
+In Pulse: open the **Swarm** page for your local host — you should see the
 `web` (3/3) and `redis` services and one manager node. The
 `/api/webhooks/:host/swarm/:service/update` endpoint maps to
 `docker service update --force`.
@@ -62,8 +62,8 @@ real environment. Any **one** of these works — `kind` is the lightest.
 brew install kind kubectl
 # or: go install sigs.k8s.io/kind@latest
 
-kind create cluster --name beacon-test
-kubectl config use-context kind-beacon-test
+kind create cluster --name pulse-test
+kubectl config use-context kind-pulse-test
 
 # Seed some workloads
 kubectl create deployment web --image=nginx:alpine --replicas=2
@@ -73,35 +73,35 @@ kubectl -n demo create deployment api --image=nginx:alpine
 kubectl get pods -A
 ```
 
-Beacon's **Kubernetes** page reads pods & namespaces cluster-wide. The rollout
+Pulse's **Kubernetes** page reads pods & namespaces cluster-wide. The rollout
 webhook (`/api/webhooks/:host/k8s/:namespace/:deployment/rollout`) runs the
 equivalent of `kubectl rollout restart deployment/<name> -n <ns>`.
 
 Delete the cluster (removes everything):
 
 ```bash
-kind delete cluster --name beacon-test
+kind delete cluster --name pulse-test
 ```
 
 ### Option B — minikube
 
 ```bash
 brew install minikube kubectl
-minikube start --profile beacon-test
-kubectl config use-context beacon-test
+minikube start --profile pulse-test
+kubectl config use-context pulse-test
 kubectl create deployment web --image=nginx:alpine --replicas=2
 # ...
-minikube delete --profile beacon-test
+minikube delete --profile pulse-test
 ```
 
 ### Option C — k3d (k3s in Docker, very fast)
 
 ```bash
 brew install k3d kubectl
-k3d cluster create beacon-test
+k3d cluster create pulse-test
 kubectl create deployment web --image=nginx:alpine --replicas=2
 # ...
-k3d cluster delete beacon-test
+k3d cluster delete pulse-test
 ```
 
 > **Isolation note:** each of these creates its own kube-context. The agent uses

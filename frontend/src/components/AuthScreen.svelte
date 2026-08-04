@@ -60,7 +60,7 @@
       <div class="auth-mark">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M3 16L12 20L21 16M3 12L12 16L21 12M12 3L21 8L12 13L3 8L12 3Z" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </div>
-      <div class="auth-brand-name">Beacon</div>
+      <div class="auth-brand-name">Pulse</div>
     </div>
 
     {#if mode === 'loading'}

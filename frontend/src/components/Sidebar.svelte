@@ -11,7 +11,7 @@
 <aside>
   <div class="brand">
     <span class="logo">◈</span>
-    <span class="name">Beacon</span>
+    <span class="name">Pulse</span>
   </div>
 
   <nav>

@@ -55,7 +55,7 @@
   }
 
   async function remove(host: Environment) {
-    if (!confirm(`Remove host "${host.name}"? This only disconnects it from Beacon.`)) return;
+    if (!confirm(`Remove host "${host.name}"? This only disconnects it from Pulse.`)) return;
     try {
       await api.deleteHost(host.id);
       app.toast(`Host "${host.name}" removed`, 'warn');

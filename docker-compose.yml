@@ -1,4 +1,4 @@
-# Full Beacon stack: agent (Docker/Swarm/k8s executor) + gateway (HTTP API + DB)
+# Full Pulse stack: agent (Docker/Swarm/k8s executor) + gateway (HTTP API + DB)
 # + frontend (nginx). Bring it all up with:  docker compose up -d --build
 #
 # The agent needs the host Docker socket. To also manage Swarm/k8s, run the
@@ -10,7 +10,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: agent
-    image: beacon-agent
+    image: pulse-agent
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # Host filesystem (read-only) so disk metrics reflect the real host, not
@@ -30,14 +30,14 @@ services:
       context: .
       dockerfile: Dockerfile
       target: gateway
-    image: beacon-gateway
+    image: pulse-gateway
     environment:
       AGENT_ADDR: agent:9000
       HTTP_PORT: "8080"
-      DATABASE_URL: sqlite:///data/beacon.db
+      DATABASE_URL: sqlite:///data/pulse.db
       # SLACK_WEBHOOK_URL: https://hooks.slack.com/services/...
     volumes:
-      - beacon-data:/data
+      - pulse-data:/data
     depends_on:
       - agent
     restart: unless-stopped
@@ -45,7 +45,7 @@ services:
   frontend:
     build:
       context: ./frontend
-    image: beacon-frontend
+    image: pulse-frontend
     ports:
       - "8088:80"          # open http://localhost:8088
     depends_on:
@@ -53,4 +53,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  beacon-data:
+  pulse-data:

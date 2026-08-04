@@ -1,11 +1,11 @@
 # Building Your First HTTP Server with Axum
 
-This guide will walk you through building a simple HTTP server using Axum, one of the fastest and most ergonomic web frameworks in Rust. This is your first hands-on Beacon component!
+This guide will walk you through building a simple HTTP server using Axum, one of the fastest and most ergonomic web frameworks in Rust. This is your first hands-on Pulse component!
 
 ## What You'll Build
 
 A simple HTTP server that:
-- Responds to GET requests at `/` with "Hello, Beacon!"
+- Responds to GET requests at `/` with "Hello, Pulse!"
 - Responds to GET requests at `/health` with a health check status
 - Runs on `http://localhost:3000`
 
@@ -23,13 +23,13 @@ A simple HTTP server that:
 cd /Users/mac/Documents/projects/personal/unbound
 
 # Create a new Rust project
-cargo new beacon-server
-cd beacon-server
+cargo new pulse-server
+cd pulse-server
 ```
 
 This creates:
 ```
-beacon-server/
+pulse-server/
 ├── Cargo.toml      # Project configuration
 └── src/
     └── main.rs     # Your code goes here
@@ -41,7 +41,7 @@ Open `Cargo.toml` and add the required dependencies:
 
 ```toml
 [package]
-name = "beacon-server"
+name = "pulse-server"
 version = "0.1.0"
 edition = "2021"
 
@@ -88,7 +88,7 @@ async fn main() {
         .unwrap();  // .unwrap() panics if there's an error (fine for learning)
 
     // Print a message so we know the server started
-    println!("🚀 Beacon server listening on http://localhost:3000");
+    println!("🚀 Pulse server listening on http://localhost:3000");
     
     // Start the server and serve our app
     // This runs forever until you stop it (Ctrl+C)
@@ -100,7 +100,7 @@ async fn main() {
 // Handler function for the root route (/)
 // This is an async function that returns a string
 async fn root_handler() -> &'static str {
-    "Hello, Beacon! 🚀"
+    "Hello, Pulse! 🚀"
 }
 
 // Handler function for the health check route (/health)
@@ -118,10 +118,10 @@ cargo run
 
 You should see:
 ```
-   Compiling beacon-server v0.1.0
+   Compiling pulse-server v0.1.0
     Finished dev [unoptimized + debuginfo] target(s) in 3.2s
-     Running `target/debug/beacon-server`
-🚀 Beacon server listening on http://localhost:3000
+     Running `target/debug/pulse-server`
+🚀 Pulse server listening on http://localhost:3000
 ```
 
 ## Step 5: Test It
@@ -131,7 +131,7 @@ Open a new terminal and test your server:
 ```bash
 # Test the root endpoint
 curl http://localhost:3000/
-# Output: Hello, Beacon! 🚀
+# Output: Hello, Pulse! 🚀
 
 # Test the health endpoint
 curl http://localhost:3000/health
@@ -178,7 +178,7 @@ let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
 ### 4. Handler Functions
 ```rust
 async fn root_handler() -> &'static str {
-    "Hello, Beacon! 🚀"
+    "Hello, Pulse! 🚀"
 }
 ```
 - Handlers are async functions
@@ -220,7 +220,7 @@ async fn main() {
         .await
         .unwrap();
 
-    println!("🚀 Beacon server listening on http://localhost:3000");
+    println!("🚀 Pulse server listening on http://localhost:3000");
     
     axum::serve(listener, app)
         .await
@@ -228,7 +228,7 @@ async fn main() {
 }
 
 async fn root_handler() -> &'static str {
-    "Hello, Beacon! 🚀"
+    "Hello, Pulse! 🚀"
 }
 
 async fn health_handler() -> &'static str {
@@ -320,7 +320,7 @@ Now every time you save a file, the server automatically rebuilds and restarts!
 
 ## Next Steps
 
-You've built your first Beacon component! Next, you'll learn to:
+You've built your first Pulse component! Next, you'll learn to:
 
 1. **Connect to Docker** ([Docker Integration](./04-docker-integration.md))
 2. **Add Prometheus metrics** ([Prometheus Metrics](./05-prometheus-metrics.md))
@@ -336,4 +336,4 @@ Try adding these features on your own:
 2. Add a `/containers` endpoint that returns a JSON array of fake container data
 3. Add error handling using `Result` instead of `.unwrap()`
 
-Great work! You're on your way to building Beacon! 🚀
+Great work! You're on your way to building Pulse! 🚀

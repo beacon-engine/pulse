@@ -1,6 +1,6 @@
-# Beacon Implementation Plan
+# Pulse Implementation Plan
 
-This document outlines the step-by-step implementation of Beacon, broken down into small, manageable modules. Each module builds on the previous one, progressing from simplest to most complex.
+This document outlines the step-by-step implementation of Pulse, broken down into small, manageable modules. Each module builds on the previous one, progressing from simplest to most complex.
 
 ## Learning Approach
 
@@ -113,9 +113,9 @@ This document outlines the step-by-step implementation of Beacon, broken down in
 - `GET /metrics` - Prometheus metrics endpoint
 
 **Metrics to expose**:
-- `beacon_http_requests_total` - Total HTTP requests
-- `beacon_containers_total` - Number of containers
-- `beacon_uptime_seconds` - Server uptime
+- `pulse_http_requests_total` - Total HTTP requests
+- `pulse_containers_total` - Number of containers
+- `pulse_uptime_seconds` - Server uptime
 
 **New dependencies**:
 - `prometheus` - Metrics library

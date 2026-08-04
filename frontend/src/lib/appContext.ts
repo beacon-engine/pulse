@@ -1,7 +1,7 @@
 import { getContext, setContext } from 'svelte';
 import type { AppState } from '../types/appState';
 
-const KEY = 'beacon-app-state';
+const KEY = 'pulse-app-state';
 
 export function setAppState(state: AppState) {
   setContext(KEY, state);

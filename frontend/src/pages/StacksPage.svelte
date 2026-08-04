@@ -155,7 +155,7 @@
   {#if app.savedStacks.length === 0}
     <div class="empty-state small">
       <p>No saved stacks yet</p>
-      <span class="empty-hint">Create a compose definition and run it from Beacon</span>
+      <span class="empty-hint">Create a compose definition and run it from Pulse</span>
     </div>
   {:else}
     <div class="saved-stack-list">

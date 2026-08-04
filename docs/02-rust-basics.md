@@ -1,10 +1,10 @@
-# Rust Basics for Beacon
+# Rust Basics for Pulse
 
-This guide covers the essential Rust concepts you need to understand before building Beacon. We'll focus on practical knowledge rather than comprehensive coverage.
+This guide covers the essential Rust concepts you need to understand before building Pulse. We'll focus on practical knowledge rather than comprehensive coverage.
 
 ## Why Rust?
 
-Before diving in, let's understand why Rust is perfect for Beacon:
+Before diving in, let's understand why Rust is perfect for Pulse:
 
 - **Memory Safety**: No null pointer crashes, no data races
 - **Performance**: As fast as C/C++, no garbage collection pauses
@@ -30,7 +30,7 @@ y = 6; // ✅ This is fine
 let z: i32 = 10;
 ```
 
-**Why this matters for Beacon**: Immutability prevents accidental changes to configuration, making your code safer.
+**Why this matters for Pulse**: Immutability prevents accidental changes to configuration, making your code safer.
 
 ### 2. Ownership (The Most Important Concept)
 
@@ -51,7 +51,7 @@ fn main() {
 2. When the owner goes out of scope, the value is dropped
 3. You can't use a value after it's been moved
 
-**Why this matters for Beacon**: No memory leaks, no use-after-free bugs. Container management is safe by default.
+**Why this matters for Pulse**: No memory leaks, no use-after-free bugs. Container management is safe by default.
 
 ### 3. Borrowing and References
 
@@ -89,7 +89,7 @@ fn change(s: &mut String) {
 - But not both at the same time
 - References must always be valid
 
-**Why this matters for Beacon**: Safe concurrent access to container state without data races.
+**Why this matters for Pulse**: Safe concurrent access to container state without data races.
 
 ### 4. Structs (Data Structures)
 
@@ -116,7 +116,7 @@ let container = Container {
 println!("Container {} is {}", container.name, container.status);
 ```
 
-**Why this matters for Beacon**: You'll use structs to represent containers, clusters, metrics, etc.
+**Why this matters for Pulse**: You'll use structs to represent containers, clusters, metrics, etc.
 
 ### 5. Enums and Pattern Matching
 
@@ -153,7 +153,7 @@ fn handle_event(event: Event) {
 }
 ```
 
-**Why this matters for Beacon**: Perfect for representing container states, API responses, and events.
+**Why this matters for Pulse**: Perfect for representing container states, API responses, and events.
 
 ### 6. Result and Option (Error Handling)
 
@@ -200,7 +200,7 @@ fn read_config() -> Result<String, Error> {
 }
 ```
 
-**Why this matters for Beacon**: Docker/Kubernetes operations can fail. Result forces you to handle errors explicitly.
+**Why this matters for Pulse**: Docker/Kubernetes operations can fail. Result forces you to handle errors explicitly.
 
 ### 7. Traits (Interfaces)
 
@@ -232,11 +232,11 @@ impl Manageable for Container {
 }
 ```
 
-**Why this matters for Beacon**: You'll use traits to define common behavior for Docker containers, K8s pods, etc.
+**Why this matters for Pulse**: You'll use traits to define common behavior for Docker containers, K8s pods, etc.
 
 ### 8. Async/Await (Asynchronous Programming)
 
-Beacon needs to handle many concurrent operations (monitoring multiple containers, handling API requests, etc.).
+Pulse needs to handle many concurrent operations (monitoring multiple containers, handling API requests, etc.).
 
 ```rust
 use tokio; // Async runtime
@@ -263,7 +263,7 @@ async fn main() {
 - `.await` waits for an async operation to complete
 - `tokio` is the async runtime we'll use
 
-**Why this matters for Beacon**: You'll monitor hundreds of containers simultaneously without blocking.
+**Why this matters for Pulse**: You'll monitor hundreds of containers simultaneously without blocking.
 
 ### 9. Modules and Crates
 
@@ -294,11 +294,11 @@ axum = "0.7"
 bollard = "0.16"
 ```
 
-**Why this matters for Beacon**: You'll organize code into modules (docker, kubernetes, metrics, etc.) and use many crates.
+**Why this matters for Pulse**: You'll organize code into modules (docker, kubernetes, metrics, etc.) and use many crates.
 
 ## Practical Example: Container Struct
 
-Let's combine these concepts into something Beacon-like:
+Let's combine these concepts into something Pulse-like:
 
 ```rust
 use std::collections::HashMap;
@@ -400,4 +400,4 @@ Now that you understand the basics:
 
 Don't worry if ownership/borrowing feels confusing at first—it clicks after practice! The Rust compiler is your friend; its error messages are incredibly helpful.
 
-Ready to build your first Beacon component? Let's go! 🚀
+Ready to build your first Pulse component? Let's go! 🚀

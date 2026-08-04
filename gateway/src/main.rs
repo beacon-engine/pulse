@@ -1,4 +1,4 @@
-//! Beacon gateway — the frontend-facing HTTP API.
+//! Pulse gateway — the frontend-facing HTTP API.
 //!
 //! Owns the database (hosts, stacks, webhook tokens, events) and serves the
 //! frontend. Every Docker / Swarm / Kubernetes operation is forwarded to the
@@ -30,7 +30,7 @@ use state::AppState;
 
 #[tokio::main]
 async fn main() {
-    println!("Starting Beacon gateway v0.1.0");
+    println!("Starting Pulse gateway v0.1.0");
 
     let cfg = config::Config::from_env();
     metrics::init();
@@ -145,7 +145,7 @@ async fn main() {
         .await
         .unwrap_or_else(|_| panic!("Failed to bind to port {}", cfg.http_port));
 
-    println!("Beacon gateway listening on http://localhost:{}", cfg.http_port);
+    println!("Pulse gateway listening on http://localhost:{}", cfg.http_port);
     println!("Forwarding Docker operations to agent at {}", cfg.agent_addr);
 
     // Consume the agent's Docker event stream in the background.

@@ -1,4 +1,4 @@
-//! Shared wire types for the Beacon gateway <-> agent protocol.
+//! Shared wire types for the Pulse gateway <-> agent protocol.
 //!
 //! The gateway forwards operator requests to an agent and deserializes the
 //! agent's responses. Both sides link this crate so the request/response
