@@ -23,11 +23,11 @@ and alerting.
 Pulse is three Rust crates plus a Svelte frontend:
 
 ```
-┌──────────┐   HTTP/JSON    ┌───────────┐   TCP (framed)   ┌─────────┐   Docker API   ┌────────┐
-│ frontend │ ─────────────▶ │  gateway  │ ───────────────▶ │  agent  │ ─────────────▶ │ Docker │
-│ (Svelte) │ ◀───────────── │ HTTP + DB │ ◀─────────────── │executor │ ◀───────────── │ Swarm  │
-└──────────┘   cookies/WS   └───────────┘   Request/Resp   └─────────┘   kube API      │  k8s   │
-                                  │                                                     └────────┘
+┌──────────┐   HTTP/JSON    ┌───────────┐   TCP (framed)    ┌─────────┐   Docker API   ┌────────┐
+│ frontend │ ─────────────> │  gateway  │ ────────────────> │  agent  │ ─────────────> │ Docker │
+│ (Svelte) │ <───────────── │ HTTP + DB │ <──────────────── │executor │ <───────────── │ Swarm  │
+└──────────┘   cookies/WS   └───────────┘   Request/Resp    └─────────┘   kube API     │  k8s   │
+                                  │                                                    └────────┘
                               SQLite DB
                      (users, hosts, stacks, tokens, events)
 ```
@@ -53,12 +53,15 @@ Pulse is three Rust crates plus a Svelte frontend:
 
 ## Supported container systems
 
-| System           | Support | Notes |
-| ---------------- | ------- | ----- |
-| **Docker**       | ✅ Full | containers, images, volumes, networks, logs, exec, compose stacks |
+| System | Support | Notes |
+| :--- | :--- | :--- |
+| **Docker** | ✅ Full | containers, images, volumes, networks, logs, exec, compose stacks |
 | **Docker Swarm** | ✅ Full | services, nodes, force rolling update |
-| **Kubernetes**   | 🟡 Partial | pods, namespaces, deployment rollout (via kubeconfig / in-cluster) |
-| **Podman**       | 🟡 Partial | works via Podman's Docker-compatible socket for container/image/volume ops; no Swarm; compose needs `podman compose` |
+| **Kubernetes** | 🟡 Partial | pods, namespaces, deployment rollout (via kubeconfig / in-cluster) |
+| **Podman** | 🟡 Partial | works via Podman's Docker-compatible socket for container/image/volume ops; no Swarm; compose needs `podman compose` |
+| **AWS ECS** | 🚧 Planned | Task Metadata Endpoint v4 & AWS SDK |
+| **HashiCorp Nomad**| 🚧 Planned | Nomad HTTP REST API (`/v1/allocations`) |
+| **Fargate / Cloud Run** | 🚧 Planned | Agentless API / Polling Sidecar |
 | containerd / nerdctl / LXC | ❌ | not supported |
 
 See **[docs/LOCAL_ORCHESTRATORS.md](docs/LOCAL_ORCHESTRATORS.md)** for setting up
@@ -86,6 +89,11 @@ Swarm and Kubernetes locally in isolation to test these integrations.
 
 ### 🚧 To implement
 
+- [ ] **Expanded Engine Integrations**
+  - [ ] **Podman native support** (SSH socket forwarding + Quadlet deployment parsing)
+  - [ ] **AWS ECS agentless driver** (Task Metadata v4 API parsing & CloudWatch integration)
+  - [ ] **HashiCorp Nomad driver** (Nomad `/v1` API integration for job & allocation status)
+  - [ ] **Serverless/Agentless sidecar mode** (Pushing metrics directly to Gateway for Fargate/Cloud Run)
 - [ ] **Security modules**
   - [ ] **Encrypted gateway↔agent transport** (Noise protocol + one-time pairing token — see [Security](#authentication--security))
   - [ ] `Secure` + TLS for session cookies in production
@@ -96,6 +104,60 @@ Swarm and Kubernetes locally in isolation to test these integrations.
 - [ ] Multi-agent fleet management (many agents behind one gateway)
 - [ ] OpenTelemetry tracing + Grafana dashboard templates
 - [ ] High availability, backup/restore
+
+---
+
+## Engine Integration Guides: How New Systems Will Be Supported
+
+To maintain Pulse's low memory footprint (~20 MB RSS) and clean gateway↔agent abstraction, extending support to new container runtimes follows specific architectural patterns:
+
+### 1. Podman (Native & Remote)
+
+**The Challenge:** Podman is daemonless and rootless. It lacks a persistent background daemon like `dockerd` by default.
+
+**Implementation Strategy:**
+* **Local Socket Mode:** Pulse agents talk to the Podman system service socket (`podman system service --time=0 unix:///run/podman/podman.sock`). Because Podman exposes a Docker-compatible REST API, standard container operations map directly to existing `protocol` request types.
+* **Remote Host Mode (Agentless over SSH):** For remote Podman hosts (such as RHEL servers using Podman Quadlets), the Gateway will establish an SSH tunnel directly to the user's `/run/podman/podman.sock` using an SSH key pair configured in the host settings.
+
+---
+
+### 2. AWS ECS (Elastic Container Service) & Fargate
+
+**The Challenge:** You cannot run traditional host-level agents (like Swarm global services or K8s DaemonSets) inside AWS Fargate or managed ECS clusters where underlying EC2 instances are hidden or restricted.
+
+**Implementation Strategy:**
+* **Task-Level Agent (Sidecar / In-Task):** The agent runs inside an ECS Task and queries the **ECS Task Metadata Endpoint v4** (`${ECS_CONTAINER_METADATA_URI_V4}/task/stats`). This endpoint provides container-level CPU, memory, network stats, and lifecycle events without requiring root or Docker socket access.
+* **Gateway Cloud Poller (Agentless):** For cluster-wide views, the Gateway uses the AWS SDK for Rust (`aws-sdk-ecs`) to poll `DescribeTasks`, `ListServices`, and CloudWatch metrics.
+
+```
+┌──────────────────────────────────────────────┐
+│ AWS ECS Task                                 │
+│  ┌──────────────────┐  ┌──────────────────┐  │
+│  │ App Container    │  │ Pulse Agent      │  │
+│  └──────────────────┘  │ (Sidecar)        │  │
+│            │           └────────┬─────────┘  │
+└────────────┼────────────────────┼────────────┘
+             │                    │
+             ▼                    ▼
+   [Task Metadata API v4] ◄───────┘
+```
+
+---
+
+### 3. HashiCorp Nomad
+
+**The Challenge:** Nomad manages non-Docker workloads (executables, Java JARs, QEMU VMs) alongside raw containers, using a job/allocation model rather than pods/deployments.
+
+**Implementation Strategy:**
+* **Nomad API Client in `pulse-core`:** Add a native Nomad HTTP client to `agent/` that interfaces with Nomad's `/v1/jobs`, `/v1/allocations`, and `/v1/nodes` REST endpoints.
+* **Protocol Enum Extension:** Extend the shared `protocol` crate with Nomad domain models:
+  ```rust
+  pub enum Request {
+      // Existing Docker/K8s commands...
+      NomadListAllocations { node_id: Option<String> },
+      NomadPromoteJob { job_id: String },
+  }
+  ```
 
 ---
 
@@ -111,10 +173,10 @@ Swarm and Kubernetes locally in isolation to test these integrations.
 
 ```bash
 # 1. Agent — owns Docker/Swarm/k8s, listens on TCP
-cd agent && cargo run            # tcp://localhost:9000  (BEACON_PORT)
+cd agent && cargo run         # tcp://localhost:9000  (BEACON_PORT)
 
 # 2. Gateway — HTTP API + DB, forwards to the agent
-cd gateway && cargo run          # http://localhost:8080 (HTTP_PORT, AGENT_ADDR)
+cd gateway && cargo run       # http://localhost:8080 (HTTP_PORT, AGENT_ADDR)
 
 # 3. Frontend
 cd frontend && npm install && npm run dev   # http://localhost:9003
@@ -126,7 +188,27 @@ account** (this is the setup step). After that, log in with those credentials.
 > Starting fresh: the gateway stores everything in `gateway/pulse.db`. Delete
 > that file to reset all users/hosts/stacks.
 
-### Environment variables
+---
+
+## Testing Multi-Node Clusters Locally
+
+Testing Pulse against multi-node environments locally requires distinct network namespaces or Docker daemons.
+
+* **Docker Swarm (Multi-Node):** Use **Docker-in-Docker (DinD)** to spin up a 3-node Swarm cluster inside isolated container daemons without managing full VMs:
+  ```bash
+  # See scripts/setup-swarm-dind.sh for an automated 3-node Swarm setup
+  ./scripts/setup-swarm-dind.sh
+  ```
+* **Kubernetes (Multi-Node):** Use **`k3d`** to run a multi-node K3s cluster in Docker:
+  ```bash
+  # See scripts/setup-k8s-k3d.sh for an automated 3-node K3s setup
+  ./scripts/setup-k8s-k3d.sh
+  ```
+* **Multi-Machine VMs:** For true kernel-level isolation, use **Canonical Multipass** or **Vagrant** running lightweight Linux nodes.
+
+---
+
+## Environment variables
 
 **Gateway**
 
