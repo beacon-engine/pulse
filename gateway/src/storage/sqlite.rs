@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use chrono::Utc;
-use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
+use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 use uuid::Uuid;
 
 use crate::storage::{
@@ -196,20 +196,27 @@ impl Repository for SqliteRepository {
         Ok(id)
     }
 
-    async fn update_stack(&self, id: &str, content: &str, env_vars: Option<&str>) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "UPDATE stacks SET content = ?, env_vars = ?, updated_at = ? WHERE id = ?",
-        )
-        .bind(content)
-        .bind(env_vars)
-        .bind(Utc::now().to_rfc3339())
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
+    async fn update_stack(
+        &self,
+        id: &str,
+        content: &str,
+        env_vars: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE stacks SET content = ?, env_vars = ?, updated_at = ? WHERE id = ?")
+            .bind(content)
+            .bind(env_vars)
+            .bind(Utc::now().to_rfc3339())
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
-    async fn set_stack_webhook_token(&self, id: &str, token: Option<&str>) -> Result<(), sqlx::Error> {
+    async fn set_stack_webhook_token(
+        &self,
+        id: &str,
+        token: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
         sqlx::query("UPDATE stacks SET webhook_token = ?, updated_at = ? WHERE id = ?")
             .bind(token)
             .bind(Utc::now().to_rfc3339())
@@ -220,14 +227,12 @@ impl Repository for SqliteRepository {
     }
 
     async fn update_stack_status(&self, id: &str, status: &str) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "UPDATE stacks SET status = ?, updated_at = ? WHERE id = ?",
-        )
-        .bind(status)
-        .bind(Utc::now().to_rfc3339())
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("UPDATE stacks SET status = ?, updated_at = ? WHERE id = ?")
+            .bind(status)
+            .bind(Utc::now().to_rfc3339())
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
