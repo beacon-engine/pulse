@@ -1,0 +1,11 @@
+Docker swarm auto scale - Agent should monitor docker resources to auto scale (horizontal) if it makes sense to avoid choking the hardware
+K8 WS socket layer
+
+
+Deploy agent as a system node
+Karpenter (Auto scaling)
+Lens
+Velero (Disaster recovery)
+Enterprise Integration Patterns
+Check out Tempo for traces
+Node affinity

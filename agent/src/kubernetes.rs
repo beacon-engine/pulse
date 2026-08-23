@@ -25,7 +25,11 @@ pub async fn list_pods(client: &Client) -> Result<Vec<PodInfo>, kube::Error> {
                 .unwrap_or_else(|| "Unknown".to_string());
             let ready = status
                 .and_then(|s| s.conditions.as_ref())
-                .and_then(|c| c.iter().find(|c| c.type_ == "Ready").map(|c| c.status == "True"))
+                .and_then(|c| {
+                    c.iter()
+                        .find(|c| c.type_ == "Ready")
+                        .map(|c| c.status == "True")
+                })
                 .unwrap_or(false);
 
             let containers = status
@@ -59,7 +63,13 @@ pub async fn list_pods(client: &Client) -> Result<Vec<PodInfo>, kube::Error> {
                 })
                 .collect();
 
-            PodInfo { name, namespace, status: phase, ready, containers }
+            PodInfo {
+                name,
+                namespace,
+                status: phase,
+                ready,
+                containers,
+            }
         })
         .collect();
 
@@ -84,7 +94,10 @@ pub async fn list_namespaces(client: &Client) -> Result<Vec<NamespaceInfo>, kube
         .into_iter()
         .map(|ns| NamespaceInfo {
             name: ns.metadata.name.unwrap_or_default(),
-            status: ns.status.and_then(|s| s.phase).unwrap_or_else(|| "Unknown".to_string()),
+            status: ns
+                .status
+                .and_then(|s| s.phase)
+                .unwrap_or_else(|| "Unknown".to_string()),
         })
         .collect();
     result.sort_by(|a, b| a.name.cmp(&b.name));
@@ -93,7 +106,11 @@ pub async fn list_namespaces(client: &Client) -> Result<Vec<NamespaceInfo>, kube
 
 /// Triggers a rollout restart of a deployment by stamping the standard
 /// `kubectl.kubernetes.io/restartedAt` pod-template annotation.
-pub async fn rollout(client: &Client, namespace: &str, deployment: &str) -> Result<(), kube::Error> {
+pub async fn rollout(
+    client: &Client,
+    namespace: &str,
+    deployment: &str,
+) -> Result<(), kube::Error> {
     let deployments: Api<Deployment> = Api::namespaced(client.clone(), namespace);
     let now = chrono::Utc::now().to_rfc3339();
     let patch = serde_json::json!({
@@ -102,7 +119,11 @@ pub async fn rollout(client: &Client, namespace: &str, deployment: &str) -> Resu
         } } } }
     });
     deployments
-        .patch(deployment, &PatchParams::default(), &Patch::Merge(patch))
+        .patch(
+            deployment,
+            &PatchParams::default(),
+            &Patch::Strategic(patch),
+        )
         .await?;
     Ok(())
 }
