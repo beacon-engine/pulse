@@ -5,6 +5,7 @@ pub struct Config {
     /// TCP address of the agent (host:port), e.g. `127.0.0.1:9000`.
     pub agent_addr: String,
     pub database_url: String,
+    pub static_dir: String,
 }
 
 impl Config {
@@ -23,6 +24,9 @@ impl Config {
                 .unwrap_or_else(|_| "127.0.0.1:9000".to_string()),
             database_url: std::env::var("DATABASE_URL")
                 .unwrap_or_else(|_| "sqlite://pulse.db".to_string()),
+            // Defaults to frontend/dist for local cargo run, or /app/dist in Docker
+            static_dir: std::env::var("STATIC_DIR")
+                .unwrap_or_else(|_| "./frontend/dist".to_string()),
         }
     }
 }
