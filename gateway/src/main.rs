@@ -8,7 +8,7 @@ use axum::{
     Json, Router,
     extract::{State, WebSocketUpgrade},
     middleware,
-    response::{Html, IntoResponse, Response},
+    response::{Html, Response},
     routing::{delete, get, post},
 };
 use serde::Serialize;
@@ -194,6 +194,10 @@ async fn main() {
         .route(
             "/api/webhooks/:host_id/swarm/:service_id/update",
             post(api::webhooks::update_swarm_service),
+        )
+        .route(
+            "/api/webhooks/:host_id/swarm/:service_id/scale",
+            post(api::webhooks::scale_swarm_service),
         )
         .route(
             "/api/webhooks/:host_id/k8s/:namespace/:deployment/rollout",

@@ -321,6 +321,11 @@ export class PulseClient {
     return data;
   }
 
+  async getSwarmService(hostId: string, serviceId: string): Promise<SwarmService> {
+    const { data } = await this.http.get<SwarmService>(`/hosts/${hostId}/swarm/services/${serviceId}`);
+    return data;
+  }
+
   async getSwarmNodes(hostId: string): Promise<SwarmNode[]> {
     const { data } = await this.http.get<SwarmNode[]>(`/hosts/${hostId}/swarm/nodes`);
     return data;
@@ -345,6 +350,11 @@ export class PulseClient {
 
   async webhookUpdateSwarm(hostId: string, serviceId: string, token?: string): Promise<{ service: string; updated: boolean }> {
     const { data } = await this.http.post(`/webhooks/${hostId}/swarm/${serviceId}/update`, null, { params: { token } });
+    return data;
+  }
+
+  async webhookScaleSwarm(hostId: string, serviceId: string, count: number, token?: string): Promise<{ service: string; updated: boolean }> {
+    const { data } = await this.http.post(`/webhooks/${hostId}/swarm/${serviceId}/scale`, null, { params: { target_replicas: count, token } });
     return data;
   }
 

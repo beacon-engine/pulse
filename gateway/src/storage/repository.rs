@@ -15,7 +15,7 @@ pub trait Repository: Send + Sync {
 
     async fn get_recent_events(&self, limit: i64) -> Result<Vec<ContainerEvent>, sqlx::Error>;
 
-    async fn list_environments(&self) -> Result<Vec<Environment>, sqlx::Error>;
+    // async fn list_environments(&self) -> Result<Vec<Environment>, sqlx::Error>;
 
     /// A page of hosts, optionally filtered by a name search (case-insensitive).
     async fn list_environments_page(

@@ -1,14 +1,32 @@
-use bollard::Docker;
-use bollard::query_parameters::{
-    ListNodesOptions, ListServicesOptions, ListTasksOptionsBuilder,
-};
 use bollard::query_parameters::{InspectServiceOptions, UpdateServiceOptionsBuilder};
+use bollard::query_parameters::{ListNodesOptions, ListServicesOptions, ListTasksOptionsBuilder};
+use bollard::secret::{ServiceSpecMode, ServiceSpecModeReplicated};
+use bollard::Docker;
 use std::collections::HashMap;
 
 pub use protocol::data::orchestration::{SwarmNode, SwarmService, SwarmTask};
 
+// The use of None instead of Some(true) to compute in memory lookups for tasks state
+//
+// Single-Node / Local Dev: The overhead is negligible (a difference of ~5–15 ms). You will not notice it.
+//
+// Production Cluster (10+ Nodes, 100+ Services, 1,000+ Tasks):
+//
+// If you call status: Some(true) once every few seconds for a web dashboard, the overhead is fine and expected.
+//
+// If multiple clients or background loops poll every 500 ms with status: Some(true),
+// it forces the Swarm leader node to continuously recompute task states, causing measurable
+// CPU spikes and lock contention on the Swarm manager's internal state machine.
+//
+// Recommendation
+// For a monitoring UI or dashboard where you need 3/3 running, using status: Some(true)
+// is the correct and standard approach. Just avoid polling it on an aggressive
+// sub-second loop across multiple concurrent clients.
 pub async fn services(docker: &Docker) -> Result<Vec<SwarmService>, bollard::errors::Error> {
-    let opts: Option<ListServicesOptions> = None;
+    let opts: Option<ListServicesOptions> = Some(ListServicesOptions {
+        status: Some(true),
+        ..Default::default()
+    }); //None;
     let list = docker.list_services(opts).await?;
     let mut result = list
         .into_iter()
@@ -76,7 +94,10 @@ pub async fn nodes(docker: &Docker) -> Result<Vec<SwarmNode>, bollard::errors::E
 }
 
 /// Lists the tasks (containers) belonging to a swarm service.
-pub async fn tasks(docker: &Docker, service_id: &str) -> Result<Vec<SwarmTask>, bollard::errors::Error> {
+pub async fn tasks(
+    docker: &Docker,
+    service_id: &str,
+) -> Result<Vec<SwarmTask>, bollard::errors::Error> {
     let mut filters: HashMap<String, Vec<String>> = HashMap::new();
     filters.insert("service".to_string(), vec![service_id.to_string()]);
     let opts = ListTasksOptionsBuilder::new().filters(&filters).build();
@@ -120,20 +141,20 @@ pub async fn force_update(docker: &Docker, service_id: &str) -> Result<(), bolla
         .inspect_service(service_id, None::<InspectServiceOptions>)
         .await?;
 
-    let version = service
-        .version
-        .and_then(|v| v.index)
-        .ok_or_else(|| bollard::errors::Error::DockerResponseServerError {
+    let version = service.version.and_then(|v| v.index).ok_or_else(|| {
+        bollard::errors::Error::DockerResponseServerError {
             status_code: 500,
             message: "missing service version".into(),
-        })?;
+        }
+    })?;
 
-    let mut spec = service
-        .spec
-        .ok_or_else(|| bollard::errors::Error::DockerResponseServerError {
-            status_code: 500,
-            message: "missing service spec".into(),
-        })?;
+    let mut spec =
+        service
+            .spec
+            .ok_or_else(|| bollard::errors::Error::DockerResponseServerError {
+                status_code: 500,
+                message: "missing service spec".into(),
+            })?;
 
     if let Some(ref mut tt) = spec.task_template {
         tt.force_update = Some(tt.force_update.unwrap_or(0) + 1);
@@ -143,9 +164,78 @@ pub async fn force_update(docker: &Docker, service_id: &str) -> Result<(), bolla
         .update_service(
             service_id,
             spec,
-            UpdateServiceOptionsBuilder::new().version(version as i32).build(),
+            UpdateServiceOptionsBuilder::new()
+                .version(version as i32)
+                .build(),
             None,
         )
         .await?;
+    Ok(())
+}
+
+pub async fn scale_service(
+    docker: &Docker,
+    service_id: &str,
+    target_replicas: u64,
+) -> Result<(), bollard::errors::Error> {
+    // 1. Fetch the existing service and its current optimistic locking version
+    let service = docker
+        .inspect_service(service_id, None::<InspectServiceOptions>)
+        .await?;
+
+    let version = service.version.and_then(|v| v.index).ok_or_else(|| {
+        bollard::errors::Error::DockerResponseServerError {
+            status_code: 500,
+            message: "missing service version".into(),
+        }
+    })?;
+
+    let mut spec =
+        service
+            .spec
+            .ok_or_else(|| bollard::errors::Error::DockerResponseServerError {
+                status_code: 500,
+                message: "missing service spec".into(),
+            })?;
+
+    // 2. Modify the replica count in the service mode
+    match spec.mode {
+        Some(ServiceSpecMode {
+            replicated: Some(ref mut rep),
+            ..
+        }) => {
+            rep.replicas = Some(target_replicas as i64);
+        }
+        Some(ServiceSpecMode {
+            global: Some(_), ..
+        }) => {
+            return Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 400,
+                message: "cannot scale a global swarm service (runs 1 replica per node)".into(),
+            });
+        }
+        _ => {
+            // If mode wasn't set, default to Replicated
+            spec.mode = Some(ServiceSpecMode {
+                replicated: Some(ServiceSpecModeReplicated {
+                    replicas: Some(target_replicas as i64),
+                }),
+                ..Default::default()
+            });
+        }
+    }
+
+    // 3. Dispatch the update to Swarm manager
+    docker
+        .update_service(
+            service_id,
+            spec,
+            UpdateServiceOptionsBuilder::new()
+                .version(version as i32)
+                .build(),
+            None,
+        )
+        .await?;
+
     Ok(())
 }

@@ -40,67 +40,167 @@ pub enum Request {
     Ping,
 
     // ── Containers ──────────────────────────────────────────────────────────────
-    ListContainers { docker_host: String },
-    InspectContainer { docker_host: String, id: String },
-    InspectRawContainer { docker_host: String, id: String },
-    RecreateContainer { docker_host: String, id: String, ports: Vec<PortMap> },
+    ListContainers {
+        docker_host: String,
+    },
+    InspectContainer {
+        docker_host: String,
+        id: String,
+    },
+    InspectRawContainer {
+        docker_host: String,
+        id: String,
+    },
+    RecreateContainer {
+        docker_host: String,
+        id: String,
+        ports: Vec<PortMap>,
+    },
     /// Pull (optionally) the current image tag and recreate — used by webhooks.
-    RecreateLatest { docker_host: String, id: String, pull: bool },
-    UpdateContainerEnv { docker_host: String, id: String, env: Vec<String> },
-    ExecContainer { docker_host: String, id: String, cmd: Vec<String> },
-    StartContainer { docker_host: String, id: String },
-    StopContainer { docker_host: String, id: String },
-    RestartContainer { docker_host: String, id: String },
-    ContainerLogs { docker_host: String, id: String, tail: u32 },
-    ContainerNetworks { docker_host: String, id: String },
+    RecreateLatest {
+        docker_host: String,
+        id: String,
+        pull: bool,
+    },
+    UpdateContainerEnv {
+        docker_host: String,
+        id: String,
+        env: Vec<String>,
+    },
+    ExecContainer {
+        docker_host: String,
+        id: String,
+        cmd: Vec<String>,
+    },
+    StartContainer {
+        docker_host: String,
+        id: String,
+    },
+    StopContainer {
+        docker_host: String,
+        id: String,
+    },
+    RestartContainer {
+        docker_host: String,
+        id: String,
+    },
+    ContainerLogs {
+        docker_host: String,
+        id: String,
+        tail: u32,
+    },
+    ContainerNetworks {
+        docker_host: String,
+        id: String,
+    },
 
     // ── System / hardware ────────────────────────────────────────────────────────
-    SystemInfo { docker_host: String },
+    SystemInfo {
+        docker_host: String,
+    },
     /// Hardware metrics for the machine the agent runs on (independent of host).
     HardwareMetrics,
 
     // ── Images ────────────────────────────────────────────────────────────────────
-    ListImages { docker_host: String },
-    DeleteImage { docker_host: String, id: String },
-    PruneImages { docker_host: String },
+    ListImages {
+        docker_host: String,
+    },
+    DeleteImage {
+        docker_host: String,
+        id: String,
+    },
+    PruneImages {
+        docker_host: String,
+    },
 
     // ── Volumes ─────────────────────────────────────────────────────────────────
-    ListVolumes { docker_host: String },
-    DeleteVolume { docker_host: String, name: String },
-    PruneVolumes { docker_host: String },
+    ListVolumes {
+        docker_host: String,
+    },
+    DeleteVolume {
+        docker_host: String,
+        name: String,
+    },
+    PruneVolumes {
+        docker_host: String,
+    },
 
     // ── Networks ──────────────────────────────────────────────────────────────────
-    ListHostNetworks { docker_host: String },
-    NetworkConnect { docker_host: String, network_id: String, container_id: String },
-    NetworkDisconnect { docker_host: String, network_id: String, container_id: String },
+    ListHostNetworks {
+        docker_host: String,
+    },
+    NetworkConnect {
+        docker_host: String,
+        network_id: String,
+        container_id: String,
+    },
+    NetworkDisconnect {
+        docker_host: String,
+        network_id: String,
+        container_id: String,
+    },
 
     // ── Detected stacks (from container labels) ───────────────────────────────────
-    ListDetectedStacks { docker_host: String },
+    ListDetectedStacks {
+        docker_host: String,
+    },
 
     // ── Compose ─────────────────────────────────────────────────────────────────
-    ComposeUp { docker_host: String, stack: ComposeStack },
-    ComposeDown { docker_host: String, stack: ComposeStack },
-    ComposePull { docker_host: String, stack: ComposeStack },
+    ComposeUp {
+        docker_host: String,
+        stack: ComposeStack,
+    },
+    ComposeDown {
+        docker_host: String,
+        stack: ComposeStack,
+    },
+    ComposePull {
+        docker_host: String,
+        stack: ComposeStack,
+    },
 
     // ── Swarm ─────────────────────────────────────────────────────────────────────
-    ListSwarmServices { docker_host: String },
-    ListSwarmNodes { docker_host: String },
+    ListSwarmServices {
+        docker_host: String,
+    },
+    ListSwarmNodes {
+        docker_host: String,
+    },
     /// Tasks (containers) belonging to a swarm service.
-    ListSwarmTasks { docker_host: String, service_id: String },
+    ListSwarmTasks {
+        docker_host: String,
+        service_id: String,
+    },
     /// Force a rolling update of a swarm service (bump force_update).
-    UpdateSwarmService { docker_host: String, service_id: String },
+    UpdateSwarmService {
+        docker_host: String,
+        service_id: String,
+    },
+    ScaleSwarmService {
+        docker_host: String,
+        service_id: String,
+        target_replicas: u64,
+    },
 
     // ── Kubernetes ────────────────────────────────────────────────────────────────
     K8sPods,
     K8sNamespaces,
-    K8sRollout { namespace: String, deployment: String },
-    K8sDeletePod { namespace: String, name: String },
+    K8sRollout {
+        namespace: String,
+        deployment: String,
+    },
+    K8sDeletePod {
+        namespace: String,
+        name: String,
+    },
 
     // ── Event stream ──────────────────────────────────────────────────────────────
     /// Opens a long-lived stream: the agent replies with a sequence of
     /// [`Response::Event`] frames (one per Docker event) until the connection
     /// closes. Use a dedicated connection for this.
-    WatchEvents { docker_host: String },
+    WatchEvents {
+        docker_host: String,
+    },
 }
 
 /// A single Docker lifecycle event streamed in response to [`Request::WatchEvents`].
@@ -144,7 +244,10 @@ pub enum Response {
     /// One frame of a [`Request::WatchEvents`] stream.
     Event(EventFrame),
     /// The operation failed. `status` is an HTTP status code the gateway can relay.
-    Error { status: u16, message: String },
+    Error {
+        status: u16,
+        message: String,
+    },
 }
 
 /// Largest frame we will read — guards against a corrupt/hostile length prefix.
@@ -190,5 +293,6 @@ where
     }
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf).await?;
-    serde_json::from_slice(&buf).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    serde_json::from_slice(&buf)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
