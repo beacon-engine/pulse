@@ -62,15 +62,15 @@ impl Repository for SqliteRepository {
             .collect())
     }
 
-    async fn list_environments(&self) -> Result<Vec<Environment>, sqlx::Error> {
-        let rows = sqlx::query(
-            "SELECT id, name, docker_host, is_local, created_at FROM environments ORDER BY created_at ASC",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+    // async fn list_environments(&self) -> Result<Vec<Environment>, sqlx::Error> {
+    //     let rows = sqlx::query(
+    //         "SELECT id, name, docker_host, is_local, created_at FROM environments ORDER BY created_at ASC",
+    //     )
+    //     .fetch_all(&self.pool)
+    //     .await?;
 
-        Ok(rows.iter().map(row_to_env).collect())
-    }
+    //     Ok(rows.iter().map(row_to_env).collect())
+    // }
 
     async fn list_environments_page(
         &self,

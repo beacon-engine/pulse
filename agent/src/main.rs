@@ -126,11 +126,17 @@ async fn handle_conn(mut socket: TcpStream, state: Arc<AppState>) -> std::io::Re
 }
 
 fn conn_error(message: String) -> Response {
-    Response::Error { status: 502, message: format!("cannot connect to Docker: {message}") }
+    Response::Error {
+        status: 502,
+        message: format!("cannot connect to Docker: {message}"),
+    }
 }
 
 fn exec_error<E: Display>(e: E) -> Response {
-    Response::Error { status: 500, message: e.to_string() }
+    Response::Error {
+        status: 500,
+        message: e.to_string(),
+    }
 }
 
 /// Executes a single request and produces its response.
@@ -170,28 +176,44 @@ async fn dispatch(state: &AppState, req: Request) -> Response {
                 Err(e) => exec_error(e),
             }
         }
-        Request::RecreateContainer { docker_host, id, ports } => {
+        Request::RecreateContainer {
+            docker_host,
+            id,
+            ports,
+        } => {
             let d = docker!(docker_host);
             match docker::recreate(&d, &id, &ports).await {
                 Ok(new_id) => Response::Id(new_id),
                 Err(e) => exec_error(e),
             }
         }
-        Request::RecreateLatest { docker_host, id, pull } => {
+        Request::RecreateLatest {
+            docker_host,
+            id,
+            pull,
+        } => {
             let d = docker!(docker_host);
             match docker::recreate_latest(&d, &id, pull).await {
                 Ok(new_id) => Response::Id(new_id),
                 Err(e) => exec_error(e),
             }
         }
-        Request::UpdateContainerEnv { docker_host, id, env } => {
+        Request::UpdateContainerEnv {
+            docker_host,
+            id,
+            env,
+        } => {
             let d = docker!(docker_host);
             match docker::update_env(&d, &id, &env).await {
                 Ok(new_id) => Response::Id(new_id),
                 Err(e) => exec_error(e),
             }
         }
-        Request::ExecContainer { docker_host, id, cmd } => {
+        Request::ExecContainer {
+            docker_host,
+            id,
+            cmd,
+        } => {
             let d = docker!(docker_host);
             match docker::exec_command(&d, &id, cmd).await {
                 Ok(out) => Response::Text(out),
@@ -219,7 +241,11 @@ async fn dispatch(state: &AppState, req: Request) -> Response {
                 Err(e) => exec_error(e),
             }
         }
-        Request::ContainerLogs { docker_host, id, tail } => {
+        Request::ContainerLogs {
+            docker_host,
+            id,
+            tail,
+        } => {
             let d = docker!(docker_host);
             match docker::logs(&d, &id, tail).await {
                 Ok(out) => Response::Text(out),
@@ -298,14 +324,22 @@ async fn dispatch(state: &AppState, req: Request) -> Response {
                 Err(e) => exec_error(e),
             }
         }
-        Request::NetworkConnect { docker_host, network_id, container_id } => {
+        Request::NetworkConnect {
+            docker_host,
+            network_id,
+            container_id,
+        } => {
             let d = docker!(docker_host);
             match docker::connect_to_network(&d, &network_id, &container_id).await {
                 Ok(()) => Response::Ok,
                 Err(e) => exec_error(e),
             }
         }
-        Request::NetworkDisconnect { docker_host, network_id, container_id } => {
+        Request::NetworkDisconnect {
+            docker_host,
+            network_id,
+            container_id,
+        } => {
             let d = docker!(docker_host);
             match docker::disconnect_from_network(&d, &network_id, &container_id).await {
                 Ok(()) => Response::Ok,
@@ -323,10 +357,12 @@ async fn dispatch(state: &AppState, req: Request) -> Response {
         }
 
         // ── Compose ──────────────────────────────────────────────────────────────
-        Request::ComposeUp { docker_host, stack } => match compose::up(&docker_host, &stack).await {
-            Ok(out) => Response::Text(out),
-            Err(e) => exec_error(e),
-        },
+        Request::ComposeUp { docker_host, stack } => {
+            match compose::up(&docker_host, &stack).await {
+                Ok(out) => Response::Text(out),
+                Err(e) => exec_error(e),
+            }
+        }
         Request::ComposeDown { docker_host, stack } => {
             match compose::down(&docker_host, &stack).await {
                 Ok(out) => Response::Text(out),
@@ -355,16 +391,33 @@ async fn dispatch(state: &AppState, req: Request) -> Response {
                 Err(e) => exec_error(e),
             }
         }
-        Request::ListSwarmTasks { docker_host, service_id } => {
+        Request::ListSwarmTasks {
+            docker_host,
+            service_id,
+        } => {
             let d = docker!(docker_host);
             match swarm::tasks(&d, &service_id).await {
                 Ok(v) => Response::SwarmTasks(v),
                 Err(e) => exec_error(e),
             }
         }
-        Request::UpdateSwarmService { docker_host, service_id } => {
+        Request::UpdateSwarmService {
+            docker_host,
+            service_id,
+        } => {
             let d = docker!(docker_host);
             match swarm::force_update(&d, &service_id).await {
+                Ok(()) => Response::Ok,
+                Err(e) => exec_error(e),
+            }
+        }
+        Request::ScaleSwarmService {
+            docker_host,
+            service_id,
+            target_replicas,
+        } => {
+            let d = docker!(docker_host);
+            match swarm::scale_service(&d, &service_id, target_replicas).await {
                 Ok(()) => Response::Ok,
                 Err(e) => exec_error(e),
             }
@@ -385,7 +438,10 @@ async fn dispatch(state: &AppState, req: Request) -> Response {
                 Err(e) => exec_error(e),
             },
         },
-        Request::K8sRollout { namespace, deployment } => match k8s_client(state).await {
+        Request::K8sRollout {
+            namespace,
+            deployment,
+        } => match k8s_client(state).await {
             None => k8s_unavailable(),
             Some(c) => match kubernetes::rollout(&c, &namespace, &deployment).await {
                 Ok(()) => Response::Ok,
@@ -409,5 +465,8 @@ async fn dispatch(state: &AppState, req: Request) -> Response {
 }
 
 fn k8s_unavailable() -> Response {
-    Response::Error { status: 503, message: "Kubernetes not connected".into() }
+    Response::Error {
+        status: 503,
+        message: "Kubernetes not connected".into(),
+    }
 }

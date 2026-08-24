@@ -1,11 +1,21 @@
-import type { Container, ContainerEvent, K8sNamespace, K8sPod, SavedStack, Stack, SwarmNode, SwarmService } from './containers';
-import type { Environment } from './environments';
+import type {
+  Container,
+  ContainerEvent,
+  K8sNamespace,
+  K8sPod,
+  SavedStack,
+  Stack,
+  SwarmNode,
+  SwarmService,
+} from "./containers";
+import type { Environment } from "./environments";
 
 export interface AppState {
   hosts: Environment[];
   activeHostId: string | null;
   activeHost: Environment | null;
   selectedContainer: Container | null;
+  selectedSwarmService: SwarmService | null;
   containers: Container[];
   stacks: Stack[];
   savedStacks: SavedStack[];
@@ -28,5 +38,5 @@ export interface AppState {
   startContainer: (id: string) => Promise<void>;
   stopContainer: (id: string) => Promise<void>;
   restartContainer: (id: string) => Promise<void>;
-  toast: (msg: string, kind?: 'ok' | 'warn' | 'err') => void;
+  toast: (msg: string, kind?: "ok" | "warn" | "err") => void;
 }

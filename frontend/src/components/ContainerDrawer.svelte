@@ -611,12 +611,12 @@
 <style>
   .backdrop {
     position: fixed; inset: 0; background: rgba(20,22,40,.38);
-    z-index: 50; backdrop-filter: blur(1px);
+    z-index: 60; backdrop-filter: blur(1px);
   }
   .drawer {
     position: fixed; top: 0; right: 0; bottom: 0; width: 780px; max-width: 96vw;
     background: var(--surface); border-left: 1px solid var(--border);
-    box-shadow: var(--shadow-lg); z-index: 51;
+    box-shadow: var(--shadow-lg); z-index: 61;
     display: flex; flex-direction: column; overflow: hidden;
   }
 
