@@ -1,244 +1,222 @@
 <script lang="ts">
-    import ContainerRow from "../components/ContainerRow.svelte";
-    import { getAppState } from "../lib/appContext";
-    import { ContainerFilterStatus } from "../types/containers";
+  import ContainerRow from "../components/ContainerRow.svelte";
+  import { ContainerFilterStatus } from "../types/containers";
+  import { containersStore } from "../stores/container.svelte";
+  import { hostsStore } from "../stores/hosts.svelte";
+    import { untrack } from "svelte";
 
-    const app = getAppState();
+  // Only restart polling when hostId ACTUALLY changes, ignoring internal state updates
+    $effect(() => {
+      const hostId = hostsStore.activeHostId;
+      if (hostId) {
+        untrack(() => {
+          containersStore.startPolling(15000);
+        });
+      }
+      return () => {
+        containersStore.stopPolling();
+      };
+    });
 
-    const PER_PAGE = 20;
-    const STATUS_OPTIONS = [
-        ContainerFilterStatus.All,
-        ContainerFilterStatus.Running,
-        ContainerFilterStatus.Stopped,
-    ] as const;
-    let page = $state(1);
-    let filterText = $state("");
-    let filterStatus = $state<ContainerFilterStatus>(ContainerFilterStatus.All);
+  const PER_PAGE = 20;
+  const STATUS_OPTIONS = [
+    ContainerFilterStatus.All,
+    ContainerFilterStatus.Running,
+    ContainerFilterStatus.Stopped,
+  ] as const;
 
-    let filtered = $derived(
-        app.containers
-            .filter(
-                (c) =>
-                    filterStatus === ContainerFilterStatus.All ||
-                    (filterStatus === ContainerFilterStatus.Running
-                        ? c.state === "running"
-                        : c.state !== "running"),
-            )
-            .filter(
-                (c) =>
-                    !filterText ||
-                    c.name.toLowerCase().includes(filterText.toLowerCase()) ||
-                    c.image.toLowerCase().includes(filterText.toLowerCase()),
-            ),
-    );
-    let totalPages = $derived(
-        Math.max(1, Math.ceil(filtered.length / PER_PAGE)),
-    );
-    let paged = $derived(
-        filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE),
-    );
-    let pageNumbers = $derived(
-        Array.from({ length: totalPages }, (_, i) => i + 1).filter(
-            (p) => p === 1 || p === totalPages || Math.abs(p - page) <= 1,
-        ),
-    );
+  let page = $state(1);
+  let filterText = $state("");
+  let filterStatus = $state<ContainerFilterStatus>(ContainerFilterStatus.All);
 
-    let running = $derived(
-        app.containers.filter((c) => c.state === "running").length,
-    );
-    let stopped = $derived(
-        app.containers.filter((c) => c.state === "exited").length,
-    );
+  let filtered = $derived(
+    containersStore.containers
+      .filter(
+        (c) =>
+          filterStatus === ContainerFilterStatus.All ||
+          (filterStatus === ContainerFilterStatus.Running
+            ? c.state === "running"
+            : c.state !== "running")
+      )
+      .filter(
+        (c) =>
+          !filterText ||
+          c.name.toLowerCase().includes(filterText.toLowerCase()) ||
+          c.image.toLowerCase().includes(filterText.toLowerCase())
+      )
+  );
+
+  let totalPages = $derived(
+    Math.max(1, Math.ceil(filtered.length / PER_PAGE))
+  );
+
+  let paged = $derived(
+    filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE)
+  );
+
+  let pageNumbers = $derived(
+    Array.from({ length: totalPages }, (_, i) => i + 1).filter(
+      (p) => p === 1 || p === totalPages || Math.abs(p - page) <= 1
+    )
+  );
+
+  let running = $derived(
+    containersStore.containers.filter((c) => c.state === "running").length
+  );
+  let stopped = $derived(
+    containersStore.containers.filter((c) => c.state === "exited").length
+  );
 </script>
 
 <div class="kpi-row">
-    <div class="kpi-card">
-        <div class="kpi-top">
-            <span class="kpi-lbl">Running</span>
-            <div class="kpi-icon" style="background:var(--green-tint)">
-                <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="var(--green)"
-                    stroke-width="2"><path d="M5 12l4 4 10-10" /></svg
-                >
-            </div>
-        </div>
-        <div class="kpi-val">
-            {running}<span class="kpi-of"> / {app.containers.length}</span>
-        </div>
-        <div class="kpi-trend" style="color:var(--green)">
-            containers active
-        </div>
+  <div class="kpi-card">
+    <div class="kpi-top">
+      <span class="kpi-lbl">Running</span>
+      <div class="kpi-icon" style="background:var(--green-tint)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2">
+          <path d="M5 12l4 4 10-10" />
+        </svg>
+      </div>
     </div>
-    <div class="kpi-card">
-        <div class="kpi-top">
-            <span class="kpi-lbl">Stopped</span>
-            <div class="kpi-icon" style="background:var(--red-tint)">
-                <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="var(--red)"
-                    stroke-width="2"
-                    ><rect x="6" y="6" width="12" height="12" rx="2" /></svg
-                >
-            </div>
-        </div>
-        <div class="kpi-val">{stopped}</div>
-        <div class="kpi-trend" style="color:var(--mist)">not running</div>
+    <div class="kpi-val">
+      {running}<span class="kpi-of"> / {containersStore.containers.length}</span>
     </div>
-    <div class="kpi-card">
-        <div class="kpi-top">
-            <span class="kpi-lbl">Total</span>
-            <div class="kpi-icon" style="background:var(--accent-tint)">
-                <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="var(--accent)"
-                    stroke-width="2"
-                    ><path
-                        d="M12 2l9 4.5-9 4.5-9-4.5L12 2zM3 12l9 4.5 9-4.5M3 17l9 4.5 9-4.5"
-                    /></svg
-                >
-            </div>
-        </div>
-        <div class="kpi-val">{app.containers.length}</div>
-        <div class="kpi-trend" style="color:var(--mist)">
-            on {app.activeHost?.name ?? "this host"}
-        </div>
+    <div class="kpi-trend" style="color:var(--green)">containers active</div>
+  </div>
+
+  <div class="kpi-card">
+    <div class="kpi-top">
+      <span class="kpi-lbl">Stopped</span>
+      <div class="kpi-icon" style="background:var(--red-tint)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="var(--red)" stroke-width="2">
+          <rect x="6" y="6" width="12" height="12" rx="2" />
+        </svg>
+      </div>
     </div>
-    <div class="kpi-card">
-        <div class="kpi-top">
-            <span class="kpi-lbl">Stacks</span>
-            <div class="kpi-icon" style="background:var(--amber-tint)">
-                <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="var(--amber)"
-                    stroke-width="2"
-                    ><rect x="3" y="3" width="7" height="7" rx="1.4" /><rect
-                        x="14"
-                        y="3"
-                        width="7"
-                        height="7"
-                        rx="1.4"
-                    /><rect x="3" y="14" width="7" height="7" rx="1.4" /><rect
-                        x="14"
-                        y="14"
-                        width="7"
-                        height="7"
-                        rx="1.4"
-                    /></svg
-                >
-            </div>
-        </div>
-        <div class="kpi-val">{app.stacks.length}</div>
-        <div class="kpi-trend" style="color:var(--mist)">compose projects</div>
+    <div class="kpi-val">{stopped}</div>
+    <div class="kpi-trend" style="color:var(--mist)">not running</div>
+  </div>
+
+  <div class="kpi-card">
+    <div class="kpi-top">
+      <span class="kpi-lbl">Total</span>
+      <div class="kpi-icon" style="background:var(--accent-tint)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2">
+          <path d="M12 2l9 4.5-9 4.5-9-4.5L12 2zM3 12l9 4.5 9-4.5M3 17l9 4.5 9-4.5" />
+        </svg>
+      </div>
     </div>
+    <div class="kpi-val">{containersStore.containers.length}</div>
+    <div class="kpi-trend" style="color:var(--mist)">
+      on {hostsStore.activeHost?.name ?? "this host"}
+    </div>
+  </div>
+
+  <div class="kpi-card">
+    <div class="kpi-top">
+      <span class="kpi-lbl">Stacks</span>
+      <div class="kpi-icon" style="background:var(--amber-tint)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="var(--amber)" stroke-width="2">
+          <rect x="3" y="3" width="7" height="7" rx="1.4" />
+          <rect x="14" y="3" width="7" height="7" rx="1.4" />
+          <rect x="3" y="14" width="7" height="7" rx="1.4" />
+          <rect x="14" y="14" width="7" height="7" rx="1.4" />
+        </svg>
+      </div>
+    </div>
+    <div class="kpi-val">{containersStore.stacks.length}</div>
+    <div class="kpi-trend" style="color:var(--mist)">compose projects</div>
+  </div>
 </div>
 
-{#if app.loading}
-    <div class="state-msg">Connecting to {app.activeHost?.name ?? "host"}…</div>
-{:else if app.activeHostId === null}
-    <div class="empty-state">
-        <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-            ><rect x="3" y="7" width="18" height="13" rx="2" /><path
-                d="M3 11h18"
-            /></svg
-        >
-        <p>No host selected — add one in the sidebar</p>
-    </div>
-{:else if app.containers.length === 0}
-    <div class="empty-state">
-        <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-            ><rect x="3" y="7" width="18" height="13" rx="2" /><path
-                d="M3 11h18M8 7V4.5A1.5 1.5 0 0 1 9.5 3h5A1.5 1.5 0 0 1 16 4.5V7"
-            /></svg
-        >
-        <p>No containers on <strong>{app.activeHost?.name}</strong></p>
-    </div>
+{#if containersStore.loading && containersStore.containers.length === 0}
+  <div class="state-msg">Connecting to {hostsStore.activeHost?.name ?? "host"}…</div>
+{:else if hostsStore.activeHostId === null}
+  <div class="empty-state">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <rect x="3" y="7" width="18" height="13" rx="2" />
+      <path d="M3 11h18" />
+    </svg>
+    <p>No host selected — add one in the sidebar</p>
+  </div>
+{:else if containersStore.containers.length === 0}
+  <div class="empty-state">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <rect x="3" y="7" width="18" height="13" rx="2" />
+      <path d="M3 11h18M8 7V4.5A1.5 1.5 0 0 1 9.5 3h5A1.5 1.5 0 0 1 16 4.5V7" />
+    </svg>
+    <p>No containers on <strong>{hostsStore.activeHost?.name}</strong></p>
+  </div>
 {:else}
-    <div class="table-wrap">
-        <div class="table-toolbar">
-            <input
-                class="filter-input"
-                placeholder="Filter by name or image…"
-                bind:value={filterText}
-            />
-            <div class="seg">
-                {#each STATUS_OPTIONS as s}
-                    <button
-                        class:active={filterStatus === s}
-                        onclick={() => {
-                            filterStatus = s;
-                            page = 1;
-                        }}
-                    >
-                        {s.charAt(0).toUpperCase() + s.slice(1)}
-                    </button>
-                {/each}
-            </div>
-        </div>
-        <table>
-            <thead>
-                <tr>
-                    <th>Name</th>
-                    <th>Status</th>
-                    <th>Stack</th>
-                    <th>Ports</th>
-                    <th></th>
-                </tr>
-            </thead>
-            <tbody>
-                {#each paged as c (c.id)}
-                    <ContainerRow
-                        container={c}
-                        onstart={app.startContainer}
-                        onstop={app.stopContainer}
-                        onrestart={app.restartContainer}
-                        onlogs={() => (app.selectedContainer = c)}
-                        oninspect={() => (app.selectedContainer = c)}
-                    />
-                {/each}
-            </tbody>
-        </table>
-        {#if totalPages > 1}
-            <div class="pagination">
-                <span class="page-info">
-                    {(page - 1) * PER_PAGE + 1}–{Math.min(
-                        page * PER_PAGE,
-                        filtered.length,
-                    )} of {filtered.length}
-                </span>
-                <div class="page-btns">
-                    <button onclick={() => (page -= 1)} disabled={page === 1}
-                        >←</button
-                    >
-                    {#each pageNumbers as p, i}
-                        {#if i > 0 && pageNumbers[i - 1] !== p - 1}<span
-                                class="ellipsis">…</span
-                            >{/if}
-                        <button
-                            class:current={p === page}
-                            onclick={() => (page = p)}>{p}</button
-                        >
-                    {/each}
-                    <button
-                        onclick={() => (page += 1)}
-                        disabled={page === totalPages}>→</button
-                    >
-                </div>
-            </div>
-        {/if}
+  <div class="table-wrap">
+    <div class="table-toolbar">
+      <input
+        class="filter-input"
+        placeholder="Filter by name or image…"
+        bind:value={filterText}
+      />
+      <div class="seg">
+        {#each STATUS_OPTIONS as s}
+          <button
+            class:active={filterStatus === s}
+            onclick={() => {
+              filterStatus = s;
+              page = 1;
+            }}
+          >
+            {s.charAt(0).toUpperCase() + s.slice(1)}
+          </button>
+        {/each}
+      </div>
     </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Status</th>
+          <th>Stack</th>
+          <th>Ports</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {#each paged as c (c.id)}
+          <ContainerRow
+            container={c}
+            onstart={() => containersStore.startContainer(c.id)}
+            onstop={() => containersStore.stopContainer(c.id)}
+            onrestart={() => containersStore.restartContainer(c.id)}
+            onlogs={() => containersStore.selectContainer(c)}
+            oninspect={() => containersStore.selectContainer(c)}
+          />
+        {/each}
+      </tbody>
+    </table>
+    {#if totalPages > 1}
+      <div class="pagination">
+        <span class="page-info">
+          {(page - 1) * PER_PAGE + 1}–{Math.min(
+            page * PER_PAGE,
+            filtered.length
+          )} of {filtered.length}
+        </span>
+        <div class="page-btns">
+          <button onclick={() => (page -= 1)} disabled={page === 1}>←</button>
+          {#each pageNumbers as p, i}
+            {#if i > 0 && pageNumbers[i - 1] !== p - 1}
+              <span class="ellipsis">…</span>
+            {/if}
+            <button
+              class:current={p === page}
+              onclick={() => (page = p)}>{p}</button>
+          {/each}
+          <button
+            onclick={() => (page += 1)}
+            disabled={page === totalPages}>→</button>
+        </div>
+      </div>
+    {/if}
+  </div>
 {/if}
 
 <style>

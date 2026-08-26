@@ -1,562 +1,505 @@
 <script lang="ts">
-    import { api } from "../lib/api";
-    import { getAppState } from "../lib/appContext";
-    import type { EnvVar, SavedStack } from "../types/containers";
+  import { stacksStore } from "../stores/stack.svelte";
+  import { hostsStore } from "../stores/hosts.svelte";
+  import { containersStore } from "../stores/container.svelte";
+  import { toast } from "../lib/toast.svelte";
+  import type { EnvVar, SavedStack } from "../types/containers";
 
-    const app = getAppState();
+  // Polling lifecycle tied to host readiness
+  $effect(() => {
+    const hostId = hostsStore.activeHostId;
+    if (hostId) {
+      stacksStore.startPolling(15000);
+    }
+    return () => {
+      stacksStore.stopPolling();
+    };
+  });
 
-    // ── Drill-down: containers belonging to a saved stack ───────────────────────
-    let expandedStacks = $state<Record<string, boolean>>({});
-    function toggleStack(id: string) {
-        expandedStacks = { ...expandedStacks, [id]: !expandedStacks[id] };
-    }
-    // Compose sets the project label to the `-p` name, which is the stack name.
-    function stackContainers(name: string) {
-        return app.containers.filter((c) => c.stack === name);
-    }
-    function stateColor(s: string) {
-        return s === "running"
-            ? "var(--green)"
-            : s === "exited"
-              ? "var(--red)"
-              : "var(--amber)";
-    }
+  // ── Drill-down: containers belonging to a saved stack ───────────────────────
+  let expandedStacks = $state<Record<string, boolean>>({});
+  function toggleStack(id: string) {
+    expandedStacks = { ...expandedStacks, [id]: !expandedStacks[id] };
+  }
 
-    // ── Editor state ──────────────────────────────────────────────────────────
-    let showStackEditor = $state(false);
-    let editingStack = $state<SavedStack | null>(null);
-    let stackName = $state("");
-    let stackContent = $state("");
-    let envVars = $state<EnvVar[]>([]);
-    let stackOpBusy = $state(false);
-    let stackOpError = $state("");
+  function stackContainers(name: string) {
+    return stacksStore.containers.filter((c) => c.stack === name);
+  }
 
-    function openStackEditor(stack?: SavedStack) {
-        editingStack = stack ?? null;
-        stackName = stack ? stack.name : "";
-        stackContent = stack ? stack.content : "";
-        envVars = stack?.env_vars ? JSON.parse(stack.env_vars) : [];
-        stackOpError = "";
-        showStackEditor = true;
-    }
+  function stateColor(s: string) {
+    return s === "running"
+      ? "var(--green)"
+      : s === "exited"
+        ? "var(--red)"
+        : "var(--amber)";
+  }
 
-    function closeStackEditor() {
-        showStackEditor = false;
-        editingStack = null;
-    }
+  // ── Editor state ──────────────────────────────────────────────────────────
+  let showStackEditor = $state(false);
+  let editingStack = $state<SavedStack | null>(null);
+  let stackName = $state("");
+  let stackContent = $state("");
+  let envVars = $state<EnvVar[]>([]);
+  let stackOpBusy = $state(false);
+  let stackOpError = $state("");
 
-    function addEnvRow() {
-        envVars = [...envVars, { key: "", value: "" }];
-    }
-    function removeEnvRow(i: number) {
-        envVars = envVars.filter((_, idx) => idx !== i);
-    }
-    function updateEnvKey(i: number, v: string) {
-        envVars = envVars.map((r, idx) => (idx === i ? { ...r, key: v } : r));
-    }
-    function updateEnvVal(i: number, v: string) {
-        envVars = envVars.map((r, idx) => (idx === i ? { ...r, value: v } : r));
-    }
+  function openStackEditor(stack?: SavedStack) {
+    editingStack = stack ?? null;
+    stackName = stack ? stack.name : "";
+    stackContent = stack ? stack.content : "";
+    envVars = stack?.env_vars ? JSON.parse(stack.env_vars) : [];
+    stackOpError = "";
+    showStackEditor = true;
+  }
 
-    async function saveStack() {
-        if (!app.activeHostId) return;
-        stackOpBusy = true;
-        stackOpError = "";
-        try {
-            const validEnvVars = envVars.filter((e) => e.key.trim());
-            if (editingStack) {
-                await api.updateSavedStack(
-                    editingStack.id,
-                    stackContent,
-                    validEnvVars,
-                );
-                app.toast("Stack updated");
-            } else {
-                await api.createSavedStack(
-                    app.activeHostId,
-                    stackName,
-                    stackContent,
-                );
-                app.toast("Stack created");
-            }
-            closeStackEditor();
-            await app.refresh();
-        } catch (e: any) {
-            stackOpError = e?.response?.data ?? String(e);
-        } finally {
-            stackOpBusy = false;
-        }
-    }
+  function closeStackEditor() {
+    showStackEditor = false;
+    editingStack = null;
+  }
 
-    // ── Stack actions ─────────────────────────────────────────────────────────
-    async function runStackUp(id: string) {
-        stackOpBusy = true;
-        try {
-            await api.stackUp(id);
-            app.toast("Stack started");
-            await app.refresh();
-        } catch (e: any) {
-            app.toast(e?.response?.data ?? String(e), "err");
-        } finally {
-            stackOpBusy = false;
-        }
-    }
+  function addEnvRow() {
+    envVars = [...envVars, { key: "", value: "" }];
+  }
+  function removeEnvRow(i: number) {
+    envVars = envVars.filter((_, idx) => idx !== i);
+  }
+  function updateEnvKey(i: number, v: string) {
+    envVars = envVars.map((r, idx) => (idx === i ? { ...r, key: v } : r));
+  }
+  function updateEnvVal(i: number, v: string) {
+    envVars = envVars.map((r, idx) => (idx === i ? { ...r, value: v } : r));
+  }
 
-    async function runStackDown(id: string) {
-        stackOpBusy = true;
-        try {
-            await api.stackDown(id);
-            app.toast("Stack stopped", "warn");
-            await app.refresh();
-        } catch (e: any) {
-            app.toast(e?.response?.data ?? String(e), "err");
-        } finally {
-            stackOpBusy = false;
-        }
+  async function saveStack() {
+    if (!hostsStore.activeHostId) return;
+    stackOpBusy = true;
+    stackOpError = "";
+    try {
+      const validEnvVars = envVars.filter((e) => e.key.trim());
+      if (editingStack) {
+        await stacksStore.updateStack(editingStack.id, stackContent, validEnvVars);
+      } else {
+        await stacksStore.createStack(stackName, stackContent);
+      }
+      closeStackEditor();
+    } catch (e: any) {
+      stackOpError = e?.response?.data ?? String(e);
+    } finally {
+      stackOpBusy = false;
     }
+  }
 
-    async function removeSavedStack(id: string) {
-        if (!confirm("Delete this stack definition?")) return;
-        try {
-            await api.deleteSavedStack(id);
-            app.toast("Stack deleted", "warn");
-            await app.refresh();
-        } catch (e: any) {
-            app.toast(e?.response?.data ?? String(e), "err");
-        }
+  // ── Stack actions ─────────────────────────────────────────────────────────
+  async function runStackUp(id: string) {
+    stackOpBusy = true;
+    try {
+      await stacksStore.runStackUp(id);
+    } catch (e: any) {
+      toast.error(e?.response?.data ?? String(e));
+    } finally {
+      stackOpBusy = false;
     }
+  }
 
-    // ── Webhook token management ───────────────────────────────────────────────
-    async function enableWebhook(s: SavedStack) {
-        try {
-            await api.generateStackToken(s.id);
-            app.toast("Webhook enabled");
-            await app.refresh();
-        } catch (e: any) {
-            app.toast(String(e), "err");
-        }
+  async function runStackDown(id: string) {
+    stackOpBusy = true;
+    try {
+      await stacksStore.runStackDown(id);
+    } catch (e: any) {
+      toast.error(e?.response?.data ?? String(e));
+    } finally {
+      stackOpBusy = false;
     }
+  }
 
-    async function rotateToken(s: SavedStack) {
-        if (
-            !confirm(
-                "Rotate the webhook token? Existing URLs will stop working.",
-            )
-        )
-            return;
-        try {
-            await api.generateStackToken(s.id);
-            app.toast("Token rotated");
-            await app.refresh();
-        } catch (e: any) {
-            app.toast(String(e), "err");
-        }
+  async function removeSavedStack(id: string) {
+    if (!confirm("Delete this stack definition?")) return;
+    try {
+      await stacksStore.deleteStack(id);
+    } catch (e: any) {
+      toast.error(e?.response?.data ?? String(e));
     }
+  }
 
-    async function disableWebhook(s: SavedStack) {
-        if (!confirm("Disable this stack's webhook?")) return;
-        try {
-            await api.deleteStackToken(s.id);
-            app.toast("Webhook disabled", "warn");
-            await app.refresh();
-        } catch (e: any) {
-            app.toast(String(e), "err");
-        }
+  // ── Webhook token management ───────────────────────────────────────────────
+  async function enableWebhook(s: SavedStack) {
+    try {
+      await stacksStore.generateToken(s.id);
+      toast.success("Webhook enabled");
+    } catch (e: any) {
+      toast.error(String(e));
     }
+  }
 
-    function webhookUrl(s: SavedStack): string {
-        if (!s.webhook_token) return "";
-        return `${window.location.origin}/api/webhooks/${s.host_id}/stacks/${s.id}/redeploy?token=${s.webhook_token}`;
+  async function rotateToken(s: SavedStack) {
+    if (!confirm("Rotate the webhook token? Existing URLs will stop working.")) return;
+    try {
+      await stacksStore.generateToken(s.id);
+      toast.success("Token rotated");
+    } catch (e: any) {
+      toast.error(String(e));
     }
+  }
 
-    function copyUrl(s: SavedStack) {
-        navigator.clipboard.writeText(webhookUrl(s));
-        app.toast("Webhook URL copied");
+  async function disableWebhook(s: SavedStack) {
+    if (!confirm("Disable this stack's webhook?")) return;
+    try {
+      await stacksStore.deleteToken(s.id);
+      toast.info("Webhook disabled");
+    } catch (e: any) {
+      toast.error(String(e));
     }
+  }
+
+  function webhookUrl(s: SavedStack): string {
+    if (!s.webhook_token) return "";
+    return `${window.location.origin}/api/webhooks/${s.host_id}/stacks/${s.id}/redeploy?token=${s.webhook_token}`;
+  }
+
+  function copyUrl(s: SavedStack) {
+    navigator.clipboard.writeText(webhookUrl(s));
+    toast.success("Webhook URL copied");
+  }
 </script>
 
-{#if app.loading}
-    <div class="state-msg">Loading stacks…</div>
-{:else if app.activeHostId === null}
-    <div class="empty-state">
-        <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-            ><rect x="3" y="3" width="7" height="7" rx="1.4" /><rect
-                x="14"
-                y="3"
-                width="7"
-                height="7"
-                rx="1.4"
-            /><rect x="3" y="14" width="7" height="7" rx="1.4" /><rect
-                x="14"
-                y="14"
-                width="7"
-                height="7"
-                rx="1.4"
-            /></svg
-        >
-        <p>No host selected — add one in the sidebar</p>
-    </div>
+{#if stacksStore.loading && stacksStore.savedStacks.length === 0 && stacksStore.stacks.length === 0}
+  <div class="state-msg">Loading stacks…</div>
+{:else if hostsStore.activeHostId === null}
+  <div class="empty-state">
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.5"
+    >
+      <rect x="3" y="3" width="7" height="7" rx="1.4" />
+      <rect x="14" y="3" width="7" height="7" rx="1.4" />
+      <rect x="3" y="14" width="7" height="7" rx="1.4" />
+      <rect x="14" y="14" width="7" height="7" rx="1.4" />
+    </svg>
+    <p>No host selected — add one in the sidebar</p>
+  </div>
 {:else}
-    <div class="stack-toolbar">
-        <h2 class="section-title">Saved stacks</h2>
-        <button class="btn-primary" onclick={() => openStackEditor()}>
-            <svg
+  <div class="stack-toolbar">
+    <h2 class="section-title">Saved stacks</h2>
+    <button class="btn-primary" onclick={() => openStackEditor()}>
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+      >
+        <path d="M12 5v14M5 12h14" />
+      </svg>
+      New stack
+    </button>
+  </div>
+
+  {#if stacksStore.savedStacks.length === 0}
+    <div class="empty-state small">
+      <p>No saved stacks yet</p>
+      <span class="empty-hint">Create a compose definition and run it from Pulse</span>
+    </div>
+  {:else}
+    <div class="saved-stack-list">
+      {#each stacksStore.savedStacks as s (s.id)}
+        <div class="saved-stack-card">
+          <div class="saved-stack-hdr">
+            <button
+              class="stack-title-row stack-toggle"
+              type="button"
+              onclick={() => toggleStack(s.id)}
+            >
+              <svg
+                class="chev"
+                class:open={expandedStacks[s.id]}
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
-                stroke-width="2"><path d="M12 5v14M5 12h14" /></svg
-            >
-            New stack
-        </button>
-    </div>
+                stroke-width="2"
+              >
+                <path d="M9 6l6 6-6 6" />
+              </svg>
+              <span class="saved-stack-name">{s.name}</span>
+              <span
+                class="saved-stack-status pill {s.status === 'running'
+                  ? 'pill-green'
+                  : 'pill-mist'}">{s.status}</span
+              >
+              {#if s.env_vars && JSON.parse(s.env_vars).length > 0}
+                <span
+                  class="pill pill-blue"
+                  title="Has environment variables"
+                >
+                  {JSON.parse(s.env_vars).length} env
+                </span>
+              {/if}
+              <span class="child-count">
+                {stackContainers(s.name).length} container{stackContainers(s.name).length !== 1 ? "s" : ""}
+              </span>
+            </button>
+            <div class="saved-stack-actions">
+              <button
+                class="btn-ghost btn-sm"
+                onclick={() => runStackUp(s.id)}
+                disabled={stackOpBusy}>Start</button
+              >
+              <button
+                class="btn-ghost btn-sm"
+                onclick={() => runStackDown(s.id)}
+                disabled={stackOpBusy}>Stop</button
+              >
+              <button
+                class="btn-ghost btn-sm"
+                onclick={() => openStackEditor(s)}>Edit</button
+              >
+              <button
+                class="btn-ghost btn-sm btn-danger"
+                onclick={() => removeSavedStack(s.id)}>Delete</button
+              >
+            </div>
+          </div>
 
-    {#if app.savedStacks.length === 0}
-        <div class="empty-state small">
-            <p>No saved stacks yet</p>
-            <span class="empty-hint"
-                >Create a compose definition and run it from Pulse</span
-            >
-        </div>
-    {:else}
-        <div class="saved-stack-list">
-            {#each app.savedStacks as s (s.id)}
-                <div class="saved-stack-card">
-                    <div class="saved-stack-hdr">
-                        <button
-                            class="stack-title-row stack-toggle"
-                            type="button"
-                            onclick={() => toggleStack(s.id)}
-                        >
-                            <svg
-                                class="chev"
-                                class:open={expandedStacks[s.id]}
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"><path d="M9 6l6 6-6 6" /></svg
-                            >
-                            <span class="saved-stack-name">{s.name}</span>
-                            <span
-                                class="saved-stack-status pill {s.status ===
-                                'running'
-                                    ? 'pill-green'
-                                    : 'pill-mist'}">{s.status}</span
-                            >
-                            {#if s.env_vars && JSON.parse(s.env_vars).length > 0}
-                                <span
-                                    class="pill pill-blue"
-                                    title="Has environment variables"
-                                    >{JSON.parse(s.env_vars).length} env</span
-                                >
-                            {/if}
-                            <span class="child-count"
-                                >{stackContainers(s.name).length} container{stackContainers(
-                                    s.name,
-                                ).length !== 1
-                                    ? "s"
-                                    : ""}</span
-                            >
-                        </button>
-                        <div class="saved-stack-actions">
-                            <button
-                                class="btn-ghost btn-sm"
-                                onclick={() => runStackUp(s.id)}
-                                disabled={stackOpBusy}>Start</button
-                            >
-                            <button
-                                class="btn-ghost btn-sm"
-                                onclick={() => runStackDown(s.id)}
-                                disabled={stackOpBusy}>Stop</button
-                            >
-                            <button
-                                class="btn-ghost btn-sm"
-                                onclick={() => openStackEditor(s)}>Edit</button
-                            >
-                            <button
-                                class="btn-ghost btn-sm btn-danger"
-                                onclick={() => removeSavedStack(s.id)}
-                                >Delete</button
-                            >
-                        </div>
-                    </div>
-
-                    <!-- Webhook section -->
-                    <div class="webhook-row">
-                        {#if s.webhook_token}
-                            <div class="webhook-enabled">
-                                <span class="webhook-label">
-                                    <svg
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="2"
-                                        width="12"
-                                        height="12"
-                                        ><path
-                                            d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"
-                                        /><path
-                                            d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"
-                                        /></svg
-                                    >
-                                    Webhook active
-                                </span>
-                                <code class="webhook-url-preview"
-                                    >{webhookUrl(s).replace(
-                                        window.location.origin,
-                                        "",
-                                    )}</code
-                                >
-                                <div class="webhook-actions">
-                                    <button
-                                        class="btn-ghost btn-xs"
-                                        onclick={() => copyUrl(s)}
-                                        title="Copy webhook URL"
-                                        >Copy URL</button
-                                    >
-                                    <button
-                                        class="btn-ghost btn-xs"
-                                        onclick={() => rotateToken(s)}
-                                        title="Rotate token">Rotate</button
-                                    >
-                                    <button
-                                        class="btn-ghost btn-xs btn-danger"
-                                        onclick={() => disableWebhook(s)}
-                                        title="Disable webhook">Disable</button
-                                    >
-                                </div>
-                            </div>
-                        {:else}
-                            <button
-                                class="btn-ghost btn-xs webhook-enable-btn"
-                                onclick={() => enableWebhook(s)}
-                            >
-                                <svg
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    stroke-width="2"
-                                    width="12"
-                                    height="12"
-                                    ><path
-                                        d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"
-                                    /><path
-                                        d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"
-                                    /></svg
-                                >
-                                Enable webhook
-                            </button>
-                        {/if}
-                    </div>
-
-                    <div class="saved-stack-meta">
-                        Updated {new Date(s.updated_at).toLocaleString()}
-                    </div>
-
-                    {#if expandedStacks[s.id]}
-                        <div class="child-list">
-                            {#if stackContainers(s.name).length === 0}
-                                <div class="child-empty">
-                                    No running containers — start the stack to
-                                    see them here
-                                </div>
-                            {:else}
-                                {#each stackContainers(s.name) as c (c.id)}
-                                    <button
-                                        class="child-row"
-                                        type="button"
-                                        onclick={() =>
-                                            (app.selectedContainer = c)}
-                                    >
-                                        <span
-                                            class="child-dot"
-                                            style="background:{stateColor(
-                                                c.state,
-                                            )}"
-                                        ></span>
-                                        <span class="child-name">{c.name}</span>
-                                        <span class="child-img">{c.image}</span>
-                                        <span
-                                            class="child-stat pill {c.state ===
-                                            'running'
-                                                ? 'pill-green'
-                                                : 'pill-red'}">{c.state}</span
-                                        >
-                                    </button>
-                                {/each}
-                            {/if}
-                        </div>
-                    {/if}
-                </div>
-            {/each}
-        </div>
-    {/if}
-
-    <h2 class="section-title" style="margin-top:28px">
-        Detected compose projects
-    </h2>
-    {#if app.stacks.length === 0}
-        <div class="empty-state small">
-            <p>No compose projects detected</p>
-            <span class="empty-hint"
-                >Requires <code>com.docker.compose.project</code> label</span
-            >
-        </div>
-    {:else}
-        <div class="stack-grid">
-            {#each app.stacks as stack (stack.name)}
-                <div class="stack-card">
-                    <div class="stack-hdr">
-                        <span class="stack-name">{stack.name}</span>
-                        <span class="stack-ct"
-                            >{stack.services.length} service{stack.services
-                                .length !== 1
-                                ? "s"
-                                : ""}</span
-                        >
-                    </div>
-                    {#each stack.services as svc (svc.id)}
-                        <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-                        <div
-                            class="svc-row"
-                            onclick={() => (app.selectedContainer = svc)}
-                        >
-                            <span
-                                class="svc-dot"
-                                style="background:{svc.state === 'running'
-                                    ? 'var(--green)'
-                                    : svc.state === 'exited'
-                                      ? 'var(--red)'
-                                      : 'var(--amber)'}"
-                            ></span>
-                            <span class="svc-name">{svc.name}</span>
-                            <span class="svc-img">{svc.image}</span>
-                            <span
-                                class="svc-stat pill {svc.state === 'running'
-                                    ? 'pill-green'
-                                    : 'pill-red'}">{svc.status}</span
-                            >
-                        </div>
-                    {/each}
-                </div>
-            {/each}
-        </div>
-    {/if}
-{/if}
-
-{#if showStackEditor}
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-    <div class="modal-backdrop" onclick={closeStackEditor}></div>
-    <div class="modal" role="dialog">
-        <div class="modal-h">
-            <h3>
-                {editingStack ? `Edit — ${editingStack.name}` : "New stack"}
-            </h3>
-            <button class="close-x" onclick={closeStackEditor}>
-                <svg
+          <!-- Webhook section -->
+          <div class="webhook-row">
+            {#if s.webhook_token}
+              <div class="webhook-enabled">
+                <span class="webhook-label">
+                  <svg
                     viewBox="0 0 24 24"
                     fill="none"
                     stroke="currentColor"
-                    stroke-width="2"><path d="M6 6l12 12M18 6 6 18" /></svg
-                >
-            </button>
-        </div>
-        <div class="modal-body">
-            {#if !editingStack}
-                <label class="field-label">Stack name</label>
-                <input
-                    class="text-input"
-                    bind:value={stackName}
-                    placeholder="e.g. monitoring"
-                />
-            {/if}
-
-            <label class="field-label">Compose YAML</label>
-            <textarea
-                class="code-textarea"
-                bind:value={stackContent}
-                rows="12"
-                placeholder="services:&#10;  web:&#10;    image: nginx:latest&#10;    ports:&#10;      - 8080:80"
-            ></textarea>
-
-            <!-- Env vars editor -->
-            <div class="env-section">
-                <div class="env-header">
-                    <span class="field-label">Environment variables</span>
-                    <button class="btn-ghost btn-xs" onclick={addEnvRow}
-                        >+ Add</button
-                    >
+                    stroke-width="2"
+                    width="12"
+                    height="12"
+                  >
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                  </svg>
+                  Webhook active
+                </span>
+                <code class="webhook-url-preview">
+                  {webhookUrl(s).replace(window.location.origin, "")}
+                </code>
+                <div class="webhook-actions">
+                  <button
+                    class="btn-ghost btn-xs"
+                    onclick={() => copyUrl(s)}
+                    title="Copy webhook URL">Copy URL</button
+                  >
+                  <button
+                    class="btn-ghost btn-xs"
+                    onclick={() => rotateToken(s)}
+                    title="Rotate token">Rotate</button
+                  >
+                  <button
+                    class="btn-ghost btn-xs btn-danger"
+                    onclick={() => disableWebhook(s)}
+                    title="Disable webhook">Disable</button
+                  >
                 </div>
-                {#if envVars.length === 0}
-                    <p class="env-hint">
-                        Variables declared here are written to a <code
-                            >.env</code
-                        >
-                        file and available as <code>{"${VAR}"}</code> in the YAML
-                        above.
-                    </p>
-                {:else}
-                    <div class="env-table">
-                        {#each envVars as row, i (i)}
-                            <div class="env-row">
-                                <input
-                                    class="env-input key-input"
-                                    value={row.key}
-                                    oninput={(e) =>
-                                        updateEnvKey(
-                                            i,
-                                            (e.target as HTMLInputElement)
-                                                .value,
-                                        )}
-                                    placeholder="KEY"
-                                />
-                                <span class="env-eq">=</span>
-                                <input
-                                    class="env-input val-input"
-                                    value={row.value}
-                                    oninput={(e) =>
-                                        updateEnvVal(
-                                            i,
-                                            (e.target as HTMLInputElement)
-                                                .value,
-                                        )}
-                                    placeholder="value"
-                                />
-                                <button
-                                    class="env-del"
-                                    onclick={() => removeEnvRow(i)}
-                                    title="Remove"
-                                >
-                                    <svg
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="2"
-                                        ><path d="M6 6l12 12M18 6 6 18" /></svg
-                                    >
-                                </button>
-                            </div>
-                        {/each}
-                    </div>
-                {/if}
-            </div>
+              </div>
+            {:else}
+              <button
+                class="btn-ghost btn-xs webhook-enable-btn"
+                onclick={() => enableWebhook(s)}
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  width="12"
+                  height="12"
+                >
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                </svg>
+                Enable webhook
+              </button>
+            {/if}
+          </div>
 
-            {#if stackOpError}<div class="err-box">{stackOpError}</div>{/if}
+          <div class="saved-stack-meta">
+            Updated {new Date(s.updated_at).toLocaleString()}
+          </div>
+
+          {#if expandedStacks[s.id]}
+            <div class="child-list">
+              {#if stackContainers(s.name).length === 0}
+                <div class="child-empty">
+                  No running containers — start the stack to see them here
+                </div>
+              {:else}
+                {#each stackContainers(s.name) as c (c.id)}
+                  <button
+                    class="child-row"
+                    type="button"
+                    onclick={() => (containersStore.selectedContainer = c)}
+                  >
+                    <span
+                      class="child-dot"
+                      style="background:{stateColor(c.state)}"
+                    ></span>
+                    <span class="child-name">{c.name}</span>
+                    <span class="child-img">{c.image}</span>
+                    <span
+                      class="child-stat pill {c.state === 'running'
+                        ? 'pill-green'
+                        : 'pill-red'}">{c.state}</span
+                    >
+                  </button>
+                {/each}
+              {/if}
+            </div>
+          {/if}
         </div>
-        <div class="modal-ft">
-            <button class="btn-ghost" onclick={closeStackEditor}>Cancel</button>
-            <button
-                class="btn-primary"
-                onclick={saveStack}
-                disabled={stackOpBusy || (!editingStack && !stackName.trim())}
-            >
-                {stackOpBusy ? "Saving…" : editingStack ? "Update" : "Create"}
-            </button>
-        </div>
+      {/each}
     </div>
+  {/if}
+
+  <h2 class="section-title" style="margin-top:28px">Detected compose projects</h2>
+  {#if stacksStore.stacks.length === 0}
+    <div class="empty-state small">
+      <p>No compose projects detected</p>
+      <span class="empty-hint">Requires <code>com.docker.compose.project</code> label</span>
+    </div>
+  {:else}
+    <div class="stack-grid">
+      {#each stacksStore.stacks as stack (stack.name)}
+        <div class="stack-card">
+          <div class="stack-hdr">
+            <span class="stack-name">{stack.name}</span>
+            <span class="stack-ct">
+              {stack.services.length} service{stack.services.length !== 1 ? "s" : ""}
+            </span>
+          </div>
+          {#each stack.services as svc (svc.id)}
+            <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+            <div
+              class="svc-row"
+              onclick={() => (containersStore.selectedContainer = svc)}
+            >
+              <span
+                class="svc-dot"
+                style="background:{svc.state === 'running'
+                  ? 'var(--green)'
+                  : svc.state === 'exited'
+                    ? 'var(--red)'
+                    : 'var(--amber)'}"
+              ></span>
+              <span class="svc-name">{svc.name}</span>
+              <span class="svc-img">{svc.image}</span>
+              <span
+                class="svc-stat pill {svc.state === 'running'
+                  ? 'pill-green'
+                  : 'pill-red'}">{svc.status}</span
+              >
+            </div>
+          {/each}
+        </div>
+      {/each}
+    </div>
+  {/if}
+{/if}
+
+{#if showStackEditor}
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+  <div class="modal-backdrop" onclick={closeStackEditor}></div>
+  <div class="modal" role="dialog">
+    <div class="modal-h">
+      <h3>
+        {editingStack ? `Edit — ${editingStack.name}` : "New stack"}
+      </h3>
+      <button class="close-x" onclick={closeStackEditor}>
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <path d="M6 6l12 12M18 6 6 18" />
+        </svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      {#if !editingStack}
+        <label class="field-label">Stack name</label>
+        <input
+          class="text-input"
+          bind:value={stackName}
+          placeholder="e.g. monitoring"
+        />
+      {/if}
+
+      <label class="field-label">Compose YAML</label>
+      <textarea
+        class="code-textarea"
+        bind:value={stackContent}
+        rows="12"
+        placeholder="services:&#10;  web:&#10;    image: nginx:latest&#10;    ports:&#10;      - 8080:80"
+      ></textarea>
+
+      <!-- Env vars editor -->
+      <div class="env-section">
+        <div class="env-header">
+          <span class="field-label">Environment variables</span>
+          <button class="btn-ghost btn-xs" onclick={addEnvRow}>+ Add</button>
+        </div>
+        {#if envVars.length === 0}
+          <p class="env-hint">
+            Variables declared here are written to a <code>.env</code> file and available as <code>{"${VAR}"}</code> in the YAML above.
+          </p>
+        {:else}
+          <div class="env-table">
+            {#each envVars as row, i (i)}
+              <div class="env-row">
+                <input
+                  class="env-input key-input"
+                  value={row.key}
+                  oninput={(e) => updateEnvKey(i, (e.target as HTMLInputElement).value)}
+                  placeholder="KEY"
+                />
+                <span class="env-eq">=</span>
+                <input
+                  class="env-input val-input"
+                  value={row.value}
+                  oninput={(e) => updateEnvVal(i, (e.target as HTMLInputElement).value)}
+                  placeholder="value"
+                />
+                <button
+                  class="env-del"
+                  onclick={() => removeEnvRow(i)}
+                  title="Remove"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                  >
+                    <path d="M6 6l12 12M18 6 6 18" />
+                  </svg>
+                </button>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      {#if stackOpError}<div class="err-box">{stackOpError}</div>{/if}
+    </div>
+    <div class="modal-ft">
+      <button class="btn-ghost" onclick={closeStackEditor}>Cancel</button>
+      <button
+        class="btn-primary"
+        onclick={saveStack}
+        disabled={stackOpBusy || (!editingStack && !stackName.trim())}
+      >
+        {stackOpBusy ? "Saving…" : editingStack ? "Update" : "Create"}
+      </button>
+    </div>
+  </div>
 {/if}
 
 <style>

@@ -1,222 +1,130 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { api } from '../lib/api';
-  import { getAppState } from '../lib/appContext';
-  import Pagination from '../components/Pagination.svelte';
-  import type { DockerImage, DockerVolume, HostNetwork, SystemInfo } from '../types/containers';
+  import { resourcesStore, type ResourceTab } from "../stores/resource.svelte";
+  import { hostsStore } from "../stores/hosts.svelte";
+  import Pagination from "../components/Pagination.svelte";
+  import { fmtDate, fmtBytes } from "../utils/fmt";
 
-  const app = getAppState();
   const PER_PAGE = 50;
 
-  // Debounce helper for search inputs.
   function debounce(fn: () => void, ms = 300) {
     let t: ReturnType<typeof setTimeout>;
-    return () => { clearTimeout(t); t = setTimeout(fn, ms); };
+    return () => {
+      clearTimeout(t);
+      t = setTimeout(fn, ms);
+    };
   }
 
-  type Tab = 'images' | 'volumes' | 'networks' | 'system';
-  const TABS: Tab[] = ['images', 'volumes', 'networks', 'system'];
-  let tab = $state<Tab>('images');
+  const TABS: ResourceTab[] = ["images", "volumes", "networks", "system"];
 
-  // ── System info ───────────────────────────────────────────────────────────
-  let sysInfo    = $state<SystemInfo | null>(null);
-  let sysError   = $state('');
-  let sysLoading = $state(false);
-
-  async function loadSystem() {
-    if (!app.activeHostId) return;
-    sysLoading = true; sysError = '';
-    try { sysInfo = await api.getSystemInfo(app.activeHostId); }
-    catch (e: any) { sysError = String(e); }
-    finally { sysLoading = false; }
-  }
-
-  // ── Images ────────────────────────────────────────────────────────────────
-  let images   = $state<DockerImage[]>([]);
-  let imgTotal = $state(0);
-  let imgPage  = $state(1);
-  let imgSearch = $state('');
-  let imgError = $state('');
-  let imgBusy  = $state(false);
-
-  async function loadImages() {
-    if (!app.activeHostId) return;
-    imgBusy = true; imgError = '';
-    try {
-      const p = await api.getImages(app.activeHostId, { page: imgPage, perPage: PER_PAGE, search: imgSearch });
-      images = p.items; imgTotal = p.total;
-    }
-    catch (e: any) { imgError = String(e); }
-    finally { imgBusy = false; }
-  }
-
-  const onImgSearch = debounce(() => { imgPage = 1; loadImages(); });
-  function gotoImgPage(p: number) { imgPage = p; loadImages(); }
-
-  async function deleteImage(id: string) {
-    if (!app.activeHostId) return;
-    if (!confirm('Delete this image?')) return;
-    imgBusy = true;
-    try { await api.deleteImage(app.activeHostId, id); await loadImages(); app.toast('Image deleted', 'warn'); }
-    catch (e: any) { imgError = e?.response?.data ?? String(e); imgBusy = false; }
-  }
-
-  async function pruneImages() {
-    if (!app.activeHostId || !confirm('Delete all dangling images?')) return;
-    imgBusy = true;
-    try {
-      const r = await api.pruneDanglingImages(app.activeHostId);
-      await loadImages();
-      app.toast(`Pruned — ${fmtBytes(r.reclaimed)} freed`);
-    } catch (e: any) { imgError = String(e); imgBusy = false; }
-  }
-
-  // ── Volumes ───────────────────────────────────────────────────────────────
-  let volumes  = $state<DockerVolume[]>([]);
-  let volTotal = $state(0);
-  let volPage  = $state(1);
-  let volSearch = $state('');
-  let volError = $state('');
-  let volBusy  = $state(false);
-
-  async function loadVolumes() {
-    if (!app.activeHostId) return;
-    volBusy = true; volError = '';
-    try {
-      const p = await api.getVolumes(app.activeHostId, { page: volPage, perPage: PER_PAGE, search: volSearch });
-      volumes = p.items; volTotal = p.total;
-    }
-    catch (e: any) { volError = String(e); }
-    finally { volBusy = false; }
-  }
-
-  const onVolSearch = debounce(() => { volPage = 1; loadVolumes(); });
-  function gotoVolPage(p: number) { volPage = p; loadVolumes(); }
-
-  async function deleteVolume(name: string) {
-    if (!app.activeHostId) return;
-    if (!confirm(`Delete volume "${name}"?`)) return;
-    volBusy = true;
-    try { await api.deleteVolume(app.activeHostId, name); await loadVolumes(); app.toast('Volume deleted', 'warn'); }
-    catch (e: any) { volError = e?.response?.data ?? String(e); volBusy = false; }
-  }
-
-  async function pruneVolumes() {
-    if (!app.activeHostId || !confirm('Delete all volumes not attached to a container?')) return;
-    volBusy = true;
-    try {
-      const r = await api.pruneVolumes(app.activeHostId);
-      await loadVolumes();
-      app.toast(`Pruned — ${fmtBytes(r.reclaimed)} freed`);
-    } catch (e: any) { volError = String(e); volBusy = false; }
-  }
-
-  // ── Networks ──────────────────────────────────────────────────────────────
-  let networks  = $state<HostNetwork[]>([]);
-  let netError  = $state('');
-  let netBusy   = $state(false);
-
-  async function loadNetworks() {
-    if (!app.activeHostId) return;
-    netBusy = true; netError = '';
-    try { networks = await api.listHostNetworks(app.activeHostId); }
-    catch (e: any) { netError = String(e); }
-    finally { netBusy = false; }
-  }
-
-  const TAB_ICONS: Record<Tab, string> = {
-    images:   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
-    volumes:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>`,
-    networks: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2z"/><path d="M2 12h20M12 2c-2.5 3-4 6.3-4 10s1.5 7 4 10M12 2c2.5 3 4 6.3 4 10s-1.5 7-4 10"/></svg>`,
-    system:   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07M8.46 15.54a5 5 0 0 1 0-7.07"/></svg>`,
-  };
-
-  // ── Tab switching ─────────────────────────────────────────────────────────
-  function switchTab(t: Tab) {
-    tab = t;
-    if (t === 'images')  loadImages();
-    if (t === 'volumes') loadVolumes();
-    if (t === 'networks') loadNetworks();
-    if (t === 'system')  loadSystem();
-  }
-
-  // ── Helpers ───────────────────────────────────────────────────────────────
-  function fmtBytes(b: number): string {
-    if (b === 0) return '0 B';
-    if (b < 1048576) return `${(b / 1024).toFixed(1)} KB`;
-    if (b < 1073741824) return `${(b / 1048576).toFixed(1)} MB`;
-    return `${(b / 1073741824).toFixed(2)} GB`;
-  }
-
-  function fmtDate(ts: number): string {
-    if (!ts) return '—';
-    return new Date(ts * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-  }
-
-  // Dangling stats reflect the current page (the server sorts + paginates).
-  let danglingCount = $derived(images.filter(i => i.dangling).length);
-  let danglingSize  = $derived(images.filter(i => i.dangling).reduce((a, i) => a + i.size, 0));
-
-  onMount(() => {
-    if (app.activeHostId) loadImages();
+  const onImgSearch = debounce(() => {
+    resourcesStore.imgPage = 1;
+    resourcesStore.loadImages(PER_PAGE);
   });
 
-  // If host loads after mount, kick off initial load
-  let prevHostId = '';
+  function gotoImgPage(p: number) {
+    resourcesStore.imgPage = p;
+    resourcesStore.loadImages(PER_PAGE);
+  }
+
+  const onVolSearch = debounce(() => {
+    resourcesStore.volPage = 1;
+    resourcesStore.loadVolumes(PER_PAGE);
+  });
+
+  function gotoVolPage(p: number) {
+    resourcesStore.volPage = p;
+    resourcesStore.loadVolumes(PER_PAGE);
+  }
+
+  async function handleDeleteImage(id: string) {
+    if (!confirm("Delete this image?")) return;
+    await resourcesStore.deleteImage(id);
+  }
+
+  async function handlePruneImages() {
+    if (!confirm("Delete all dangling images?")) return;
+    await resourcesStore.pruneImages();
+  }
+
+  async function handleDeleteVolume(name: string) {
+    if (!confirm(`Delete volume "${name}"?`)) return;
+    await resourcesStore.deleteVolume(name);
+  }
+
+  async function handlePruneVolumes() {
+    if (!confirm("Delete all volumes not attached to a container?")) return;
+    await resourcesStore.pruneVolumes();
+  }
+
+  const TAB_ICONS: Record<ResourceTab, string> = {
+    images: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
+    volumes: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>`,
+    networks: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2z"/><path d="M2 12h20M12 2c-2.5 3-4 6.3-4 10s1.5 7 4 10M12 2c2.5 3 4 6.3 4 10s-1.5 7-4 10"/></svg>`,
+    system: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07M8.46 15.54a5 5 0 0 1 0-7.07"/></svg>`,
+  };
+
+  function switchTab(t: ResourceTab) {
+    resourcesStore.tab = t;
+    resourcesStore.loadActiveTab();
+  }
+
+  // Load once whenever the active host becomes available or changes
   $effect(() => {
-    const hid = app.activeHostId;
-    if (hid && hid !== prevHostId) {
-      prevHostId = hid;
-      loadImages();
-      tab = 'images';
+    const hostId = hostsStore.activeHostId;
+    if (hostId) {
+      resourcesStore.loadActiveTab();
     }
   });
 </script>
 
-{#if !app.activeHostId}
+{#if !hostsStore.activeHostId}
   <div class="empty-state"><p>Select a host to manage its resources</p></div>
 {:else}
   <!-- Tabs -->
   <div class="res-tabs">
     {#each TABS as t}
-      <button class="rtab" class:active={tab === t} onclick={() => switchTab(t)}>
+      <button class="rtab" class:active={resourcesStore.tab === t} onclick={() => switchTab(t)}>
         {@html TAB_ICONS[t]}
         {t.charAt(0).toUpperCase() + t.slice(1)}
-        {#if t === 'images' && danglingCount > 0}
-          <span class="rtab-badge">{danglingCount} dangling</span>
+        {#if t === "images" && resourcesStore.danglingCount > 0}
+          <span class="rtab-badge">{resourcesStore.danglingCount} dangling</span>
         {/if}
       </button>
     {/each}
   </div>
 
   <!-- IMAGES -->
-  {#if tab === 'images'}
+  {#if resourcesStore.tab === "images"}
     <div class="tab-toolbar">
-      {#if danglingCount > 0}
-        <button class="btn-danger" onclick={pruneImages} disabled={imgBusy}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6M9 6V4h6v2"/></svg>
-          Prune {danglingCount} dangling ({fmtBytes(danglingSize)})
+      {#if resourcesStore.danglingCount > 0}
+        <button class="btn-danger" onclick={handlePruneImages} disabled={resourcesStore.imgBusy}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6M14 11v6M9 6V4h6v2" />
+          </svg>
+          Prune {resourcesStore.danglingCount} dangling ({fmtBytes(resourcesStore.danglingSize)})
         </button>
       {/if}
-      <button class="btn-ghost btn-sm" onclick={loadImages} disabled={imgBusy}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/></svg>
+      <button class="btn-ghost btn-sm" onclick={() => resourcesStore.loadImages(PER_PAGE)} disabled={resourcesStore.imgBusy}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 12a9 9 0 1 0 2.6-6.4L3 8" /><path d="M3 3v5h5" />
+        </svg>
         Refresh
       </button>
-      <input class="search-box" placeholder="Search images…" bind:value={imgSearch} oninput={onImgSearch} />
-      {#if imgBusy}<span class="loading-hint">Loading…</span>{/if}
+      <input class="search-box" placeholder="Search images…" bind:value={resourcesStore.imgSearch} oninput={onImgSearch} />
+      {#if resourcesStore.imgBusy}<span class="loading-hint">Loading…</span>{/if}
     </div>
-    {#if imgError}<div class="err-box">{imgError}</div>{/if}
-    {#if images.length === 0 && !imgBusy}
-      <div class="empty-hint">{imgSearch ? 'No images match your search' : 'No images found'}</div>
+    {#if resourcesStore.imgError}<div class="err-box">{resourcesStore.imgError}</div>{/if}
+    {#if resourcesStore.images.length === 0 && !resourcesStore.imgBusy}
+      <div class="empty-hint">{resourcesStore.imgSearch ? "No images match your search" : "No images found"}</div>
     {:else}
       <table class="res-table">
         <thead>
           <tr><th>ID</th><th>Tags / Status</th><th>Size</th><th>Created</th><th></th></tr>
         </thead>
         <tbody>
-          {#each images as img (img.id)}
+          {#each resourcesStore.images as img (img.id)}
             <tr class:dangling-row={img.dangling}>
-              <td class="mono small id-cell">{img.id.replace('sha256:', '').slice(0, 12)}</td>
+              <td class="mono small id-cell">{img.id.replace("sha256:", "").slice(0, 12)}</td>
               <td>
                 {#if img.dangling}
                   <span class="pill-tag dangling">dangling</span>
@@ -231,73 +139,83 @@
               <td class="mono small">{fmtBytes(img.size)}</td>
               <td class="small muted">{fmtDate(img.created)}</td>
               <td>
-                <button class="row-del" onclick={() => deleteImage(img.id)} disabled={imgBusy} title="Delete image">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>
+                <button class="row-del" onclick={() => handleDeleteImage(img.id)} disabled={resourcesStore.imgBusy} title="Delete image">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14H6L5 6" />
+                  </svg>
                 </button>
               </td>
             </tr>
           {/each}
         </tbody>
       </table>
-      <Pagination page={imgPage} perPage={PER_PAGE} total={imgTotal} onpage={gotoImgPage} />
+      <Pagination page={resourcesStore.imgPage} perPage={PER_PAGE} total={resourcesStore.imgTotal} onpage={gotoImgPage} />
     {/if}
 
   <!-- VOLUMES -->
-  {:else if tab === 'volumes'}
+  {:else if resourcesStore.tab === "volumes"}
     <div class="tab-toolbar">
-      <button class="btn-danger" onclick={pruneVolumes} disabled={volBusy}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>
+      <button class="btn-danger" onclick={handlePruneVolumes} disabled={resourcesStore.volBusy}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14H6L5 6" />
+        </svg>
         Prune unused
       </button>
-      <button class="btn-ghost btn-sm" onclick={loadVolumes} disabled={volBusy}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/></svg>
+      <button class="btn-ghost btn-sm" onclick={() => resourcesStore.loadVolumes(PER_PAGE)} disabled={resourcesStore.volBusy}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 12a9 9 0 1 0 2.6-6.4L3 8" /><path d="M3 3v5h5" />
+        </svg>
         Refresh
       </button>
-      <input class="search-box" placeholder="Search volumes…" bind:value={volSearch} oninput={onVolSearch} />
-      {#if volBusy}<span class="loading-hint">Loading…</span>{/if}
+      <input class="search-box" placeholder="Search volumes…" bind:value={resourcesStore.volSearch} oninput={onVolSearch} />
+      {#if resourcesStore.volBusy}<span class="loading-hint">Loading…</span>{/if}
     </div>
-    {#if volError}<div class="err-box">{volError}</div>{/if}
-    {#if volumes.length === 0 && !volBusy}
-      <div class="empty-hint">{volSearch ? 'No volumes match your search' : 'No volumes found'}</div>
+    {#if resourcesStore.volError}<div class="err-box">{resourcesStore.volError}</div>{/if}
+    {#if resourcesStore.volumes.length === 0 && !resourcesStore.volBusy}
+      <div class="empty-hint">{resourcesStore.volSearch ? "No volumes match your search" : "No volumes found"}</div>
     {:else}
       <table class="res-table">
         <thead><tr><th>Name</th><th>Driver</th><th>Mount point</th><th>Created</th><th></th></tr></thead>
         <tbody>
-          {#each volumes as vol (vol.name)}
+          {#each resourcesStore.volumes as vol (vol.name)}
             <tr>
               <td class="mono small">{vol.name}</td>
               <td class="small">{vol.driver}</td>
               <td class="mono small muted truncate">{vol.mountpoint}</td>
-              <td class="small muted">{vol.created ? new Date(vol.created).toLocaleDateString() : '—'}</td>
+              <td class="small muted">{vol.created ? new Date(vol.created).toLocaleDateString() : "—"}</td>
               <td>
-                <button class="row-del" onclick={() => deleteVolume(vol.name)} disabled={volBusy} title="Delete volume">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>
+                <button class="row-del" onclick={() => handleDeleteVolume(vol.name)} disabled={resourcesStore.volBusy} title="Delete volume">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14H6L5 6" />
+                  </svg>
                 </button>
               </td>
             </tr>
           {/each}
         </tbody>
       </table>
-      <Pagination page={volPage} perPage={PER_PAGE} total={volTotal} onpage={gotoVolPage} />
+      <Pagination page={resourcesStore.volPage} perPage={PER_PAGE} total={resourcesStore.volTotal} onpage={gotoVolPage} />
     {/if}
 
   <!-- NETWORKS -->
-  {:else if tab === 'networks'}
+  {:else if resourcesStore.tab === "networks"}
     <div class="tab-toolbar">
-      <button class="btn-ghost btn-sm" onclick={loadNetworks} disabled={netBusy}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/></svg>
+      <button class="btn-ghost btn-sm" onclick={() => resourcesStore.loadNetworks()} disabled={resourcesStore.netBusy}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 12a9 9 0 1 0 2.6-6.4L3 8" /><path d="M3 3v5h5" />
+        </svg>
         Refresh
       </button>
-      {#if netBusy}<span class="loading-hint">Loading…</span>{/if}
+      {#if resourcesStore.netBusy}<span class="loading-hint">Loading…</span>{/if}
     </div>
-    {#if netError}<div class="err-box">{netError}</div>{/if}
-    {#if networks.length === 0 && !netBusy}
+    {#if resourcesStore.netError}<div class="err-box">{resourcesStore.netError}</div>{/if}
+    {#if resourcesStore.networks.length === 0 && !resourcesStore.netBusy}
       <div class="empty-hint">No networks found</div>
     {:else}
       <table class="res-table">
         <thead><tr><th>Name</th><th>ID</th><th>Driver</th><th>Scope</th><th>Internal</th></tr></thead>
         <tbody>
-          {#each networks as net (net.id)}
+          {#each resourcesStore.networks as net (net.id)}
             <tr>
               <td class="fw">{net.name}</td>
               <td class="mono small muted">{net.id.slice(0, 12)}</td>
@@ -314,29 +232,29 @@
     {/if}
 
   <!-- SYSTEM INFO -->
-  {:else if tab === 'system'}
-    {#if sysError}<div class="err-box">{sysError}</div>
-    {:else if sysLoading}<div class="empty-hint">Loading…</div>
-    {:else if sysInfo}
+  {:else if resourcesStore.tab === "system"}
+    {#if resourcesStore.sysError}<div class="err-box">{resourcesStore.sysError}</div>
+    {:else if resourcesStore.sysLoading}<div class="empty-hint">Loading…</div>
+    {:else if resourcesStore.sysInfo}
       <div class="sys-grid">
-        <div class="sys-card"><div class="sys-lbl">Docker version</div><div class="sys-val mono">{sysInfo.docker_version || '—'}</div></div>
-        <div class="sys-card"><div class="sys-lbl">API version</div><div class="sys-val mono">{sysInfo.api_version || '—'}</div></div>
-        <div class="sys-card"><div class="sys-lbl">OS</div><div class="sys-val">{sysInfo.os || '—'}</div></div>
-        <div class="sys-card"><div class="sys-lbl">Architecture</div><div class="sys-val mono">{sysInfo.arch || '—'}</div></div>
-        <div class="sys-card"><div class="sys-lbl">Kernel</div><div class="sys-val mono">{sysInfo.kernel || '—'}</div></div>
-        <div class="sys-card"><div class="sys-lbl">CPUs</div><div class="sys-val">{sysInfo.cpus}</div></div>
-        <div class="sys-card"><div class="sys-lbl">Total memory</div><div class="sys-val">{fmtBytes(sysInfo.total_memory)}</div></div>
-        <div class="sys-card green"><div class="sys-lbl">Running containers</div><div class="sys-val">{sysInfo.containers_running}</div></div>
-        <div class="sys-card red"><div class="sys-lbl">Stopped containers</div><div class="sys-val">{sysInfo.containers_stopped}</div></div>
-        <div class="sys-card"><div class="sys-lbl">Images</div><div class="sys-val">{sysInfo.images}</div></div>
+        <div class="sys-card"><div class="sys-lbl">Docker version</div><div class="sys-val mono">{resourcesStore.sysInfo.docker_version || "—"}</div></div>
+        <div class="sys-card"><div class="sys-lbl">API version</div><div class="sys-val mono">{resourcesStore.sysInfo.api_version || "—"}</div></div>
+        <div class="sys-card"><div class="sys-lbl">OS</div><div class="sys-val">{resourcesStore.sysInfo.os || "—"}</div></div>
+        <div class="sys-card"><div class="sys-lbl">Architecture</div><div class="sys-val mono">{resourcesStore.sysInfo.arch || "—"}</div></div>
+        <div class="sys-card"><div class="sys-lbl">Kernel</div><div class="sys-val mono">{resourcesStore.sysInfo.kernel || "—"}</div></div>
+        <div class="sys-card"><div class="sys-lbl">CPUs</div><div class="sys-val">{resourcesStore.sysInfo.cpus}</div></div>
+        <div class="sys-card"><div class="sys-lbl">Total memory</div><div class="sys-val">{fmtBytes(resourcesStore.sysInfo.total_memory)}</div></div>
+        <div class="sys-card green"><div class="sys-lbl">Running containers</div><div class="sys-val">{resourcesStore.sysInfo.containers_running}</div></div>
+        <div class="sys-card red"><div class="sys-lbl">Stopped containers</div><div class="sys-val">{resourcesStore.sysInfo.containers_stopped}</div></div>
+        <div class="sys-card"><div class="sys-lbl">Images</div><div class="sys-val">{resourcesStore.sysInfo.images}</div></div>
       </div>
       <div class="tab-toolbar" style="margin-top: 16px;">
-        <button class="btn-ghost btn-sm" onclick={loadSystem}>Refresh</button>
+        <button class="btn-ghost btn-sm" onclick={() => resourcesStore.loadSystem()}>Refresh</button>
       </div>
     {:else}
       <div class="empty-hint">Click refresh to load system info</div>
       <div class="tab-toolbar" style="margin-top: 8px;">
-        <button class="btn-ghost btn-sm" onclick={loadSystem}>Load system info</button>
+        <button class="btn-ghost btn-sm" onclick={() => resourcesStore.loadSystem()}>Load system info</button>
       </div>
     {/if}
   {/if}

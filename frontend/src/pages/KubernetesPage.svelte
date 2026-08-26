@@ -1,72 +1,111 @@
 <script lang="ts">
-  import { api } from '../lib/api';
-  import { getAppState } from '../lib/appContext';
-  import type { K8sPod } from '../types/containers';
+  import { onMount } from "svelte";
+  import { kubernetesStore } from "../stores/kubernetes.svelte";
+  import type { K8sPod } from "../types/containers";
 
-  const app = getAppState();
+  onMount(() => {
+    kubernetesStore.startPolling(15000);
+    return () => kubernetesStore.stopPolling();
+  });
 
   let expanded = $state<Record<string, boolean>>({});
   let deleting = $state<Record<string, boolean>>({});
 
-  function key(p: K8sPod) { return `${p.namespace}/${p.name}`; }
+  function key(p: K8sPod) {
+    return `${p.namespace}/${p.name}`;
+  }
+
   function toggle(p: K8sPod) {
     const k = key(p);
     expanded = { ...expanded, [k]: !expanded[k] };
   }
 
   function containerColor(s: string) {
-    if (s === 'running') return 'var(--green)';
-    if (s === 'terminated') return 'var(--red)';
-    return 'var(--amber)';
+    if (s === "running") return "var(--green)";
+    if (s === "terminated") return "var(--red)";
+    return "var(--amber)";
   }
 
   async function deletePod(p: K8sPod) {
-    if (!confirm(`Delete pod "${p.name}" in ${p.namespace}? Its controller (if any) will recreate it.`)) return;
+    if (
+      !confirm(
+        `Delete pod "${p.name}" in ${p.namespace}? Its controller (if any) will recreate it.`
+      )
+    )
+      return;
     const k = key(p);
     deleting = { ...deleting, [k]: true };
     try {
-      await api.deleteK8sPod(p.namespace, p.name);
-      app.toast(`Pod "${p.name}" deleted`, 'warn');
-      await app.refreshK8s();
+      await kubernetesStore.deletePod(p.namespace, p.name);
     } catch (e: any) {
-      app.toast(e?.response?.data ?? String(e), 'err');
+      // Error is already toasted by store
     } finally {
       deleting = { ...deleting, [k]: false };
     }
   }
 </script>
 
-{#if app.k8sLoading}
+{#if kubernetesStore.loading && kubernetesStore.pods.length === 0}
   <div class="state-msg">Loading Kubernetes…</div>
-{:else if app.k8sError}
+{:else if kubernetesStore.error && kubernetesStore.pods.length === 0}
   <div class="empty-state">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2L20 6.5V17.5L12 22L4 17.5V6.5L12 2Z"/><path d="M12 22V12M20 6.5L12 12M4 6.5L12 12"/></svg>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <path d="M12 2L20 6.5V17.5L12 22L4 17.5V6.5L12 2Z" />
+      <path d="M12 22V12M20 6.5L12 12M4 6.5L12 12" />
+    </svg>
     <p>Could not load Kubernetes</p>
-    <span class="empty-hint">{app.k8sError}</span>
-    <button class="btn-ghost" onclick={() => app.refreshK8s()}>Retry</button>
+    <span class="empty-hint">{kubernetesStore.error}</span>
+    <button class="btn-ghost" onclick={() => kubernetesStore.refresh()}>Retry</button>
   </div>
 {:else}
   <div class="kpi-row">
     <div class="kpi-card">
-      <div class="kpi-top"><span class="kpi-lbl">Pods</span><div class="kpi-icon" style="background:var(--accent-tint)"><svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M12 2L20 6.5V17.5L12 22L4 17.5V6.5L12 2Z"/></svg></div></div>
-      <div class="kpi-val">{app.pods.length}</div>
+      <div class="kpi-top">
+        <span class="kpi-lbl">Pods</span>
+        <div class="kpi-icon" style="background:var(--accent-tint)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2">
+            <path d="M12 2L20 6.5V17.5L12 22L4 17.5V6.5L12 2Z" />
+          </svg>
+        </div>
+      </div>
+      <div class="kpi-val">{kubernetesStore.pods.length}</div>
       <div class="kpi-trend" style="color:var(--mist)">cluster pods</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-top"><span class="kpi-lbl">Ready</span><div class="kpi-icon" style="background:var(--green-tint)"><svg viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><path d="M5 13l4 4 10-10"/></svg></div></div>
-      <div class="kpi-val">{app.pods.filter(p => p.ready).length}</div>
+      <div class="kpi-top">
+        <span class="kpi-lbl">Ready</span>
+        <div class="kpi-icon" style="background:var(--green-tint)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2">
+            <path d="M5 13l4 4 10-10" />
+          </svg>
+        </div>
+      </div>
+      <div class="kpi-val">{kubernetesStore.pods.filter((p) => p.ready).length}</div>
       <div class="kpi-trend" style="color:var(--green)">ready pods</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-top"><span class="kpi-lbl">Namespaces</span><div class="kpi-icon" style="background:var(--amber-tint)"><svg viewBox="0 0 24 24" fill="none" stroke="var(--amber)" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.4"/><rect x="14" y="3" width="7" height="7" rx="1.4"/><rect x="3" y="14" width="7" height="7" rx="1.4"/><rect x="14" y="14" width="7" height="7" rx="1.4"/></svg></div></div>
-      <div class="kpi-val">{app.namespaces.length}</div>
+      <div class="kpi-top">
+        <span class="kpi-lbl">Namespaces</span>
+        <div class="kpi-icon" style="background:var(--amber-tint)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--amber)" stroke-width="2">
+            <rect x="3" y="3" width="7" height="7" rx="1.4" />
+            <rect x="14" y="3" width="7" height="7" rx="1.4" />
+            <rect x="3" y="14" width="7" height="7" rx="1.4" />
+            <rect x="14" y="14" width="7" height="7" rx="1.4" />
+          </svg>
+        </div>
+      </div>
+      <div class="kpi-val">{kubernetesStore.namespaces.length}</div>
       <div class="kpi-trend" style="color:var(--mist)">namespaces</div>
     </div>
   </div>
 
   <div class="toolbar">
-    <button class="btn-ghost btn-sm" onclick={() => app.refreshK8s()}>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/></svg>
+    <button class="btn-ghost btn-sm" onclick={() => kubernetesStore.refresh()}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M3 12a9 9 0 1 0 2.6-6.4L3 8" />
+        <path d="M3 3v5h5" />
+      </svg>
       Refresh
     </button>
   </div>
@@ -74,23 +113,52 @@
   <div class="k8s-grid">
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Pod</th><th>Namespace</th><th>Status</th><th>Ready</th><th></th></tr></thead>
+        <thead>
+          <tr>
+            <th>Pod</th>
+            <th>Namespace</th>
+            <th>Status</th>
+            <th>Ready</th>
+            <th></th>
+          </tr>
+        </thead>
         <tbody>
-          {#each app.pods as pod (pod.namespace + '/' + pod.name)}
+          {#each kubernetesStore.pods as pod (pod.namespace + "/" + pod.name)}
             <tr class:row-open={expanded[key(pod)]}>
               <td class="cell-mono">
                 <button class="pod-toggle" type="button" onclick={() => toggle(pod)}>
-                  <svg class="chev" class:open={expanded[key(pod)]} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>
+                  <svg
+                    class="chev"
+                    class:open={expanded[key(pod)]}
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                  >
+                    <path d="M9 6l6 6-6 6" />
+                  </svg>
                   {pod.name}
                   <span class="ct-badge">{pod.containers.length}</span>
                 </button>
               </td>
               <td class="cell-mono cell-mist">{pod.namespace}</td>
               <td><span class="pill pill-mist">{pod.status}</span></td>
-              <td><span class="pill {pod.ready ? 'pill-green' : 'pill-red'}">{pod.ready ? 'Ready' : 'Not ready'}</span></td>
+              <td>
+                <span class="pill {pod.ready ? 'pill-green' : 'pill-red'}">
+                  {pod.ready ? "Ready" : "Not ready"}
+                </span>
+              </td>
               <td class="ta-r">
-                <button class="del-btn" title="Delete pod" disabled={deleting[key(pod)]} onclick={() => deletePod(pod)}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>
+                <button
+                  class="del-btn"
+                  title="Delete pod"
+                  disabled={deleting[key(pod)]}
+                  onclick={() => deletePod(pod)}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6" />
+                    <path d="M19 6l-1 14H6L5 6" />
+                  </svg>
                 </button>
               </td>
             </tr>
@@ -106,8 +174,18 @@
                           <span class="sub-dot" style="background:{containerColor(c.state)}"></span>
                           <span class="sub-name">{c.name}</span>
                           <span class="sub-img">{c.image}</span>
-                          <span class="pill {c.state === 'running' ? 'pill-green' : c.state === 'terminated' ? 'pill-red' : 'pill-mist'}">{c.state}</span>
-                          <span class="sub-meta">{c.ready ? 'ready' : 'not ready'} · {c.restart_count} restart{c.restart_count !== 1 ? 's' : ''}</span>
+                          <span
+                            class="pill {c.state === 'running'
+                              ? 'pill-green'
+                              : c.state === 'terminated'
+                                ? 'pill-red'
+                                : 'pill-mist'}"
+                          >
+                            {c.state}
+                          </span>
+                          <span class="sub-meta">
+                            {c.ready ? "ready" : "not ready"} · {c.restart_count} restart{c.restart_count !== 1 ? "s" : ""}
+                          </span>
                         </div>
                       {/each}
                     </div>
@@ -118,16 +196,21 @@
           {/each}
         </tbody>
       </table>
-      {#if app.pods.length === 0}
+      {#if kubernetesStore.pods.length === 0}
         <div class="empty-state small"><p>No pods found</p></div>
       {/if}
     </div>
 
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Namespace</th><th>Status</th></tr></thead>
+        <thead>
+          <tr>
+            <th>Namespace</th>
+            <th>Status</th>
+          </tr>
+        </thead>
         <tbody>
-          {#each app.namespaces as ns (ns.name)}
+          {#each kubernetesStore.namespaces as ns (ns.name)}
             <tr>
               <td class="cell-mono">{ns.name}</td>
               <td><span class="pill pill-mist">{ns.status}</span></td>
@@ -135,7 +218,7 @@
           {/each}
         </tbody>
       </table>
-      {#if app.namespaces.length === 0}
+      {#if kubernetesStore.namespaces.length === 0}
         <div class="empty-state small"><p>No namespaces found</p></div>
       {/if}
     </div>

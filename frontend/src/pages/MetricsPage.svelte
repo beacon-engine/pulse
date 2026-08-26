@@ -1,91 +1,20 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { api } from '../lib/api';
-  import { getAppState } from '../lib/appContext';
-  import type { HardwareMetrics } from '../types/containers';
+  import { metricsStore, type MetricSample } from "../stores/metric.svelte";
+  import { hostsStore } from "../stores/hosts.svelte";
+  import { fmtBytes, fmtNum, fmtUptime } from "../utils/fmt";
 
-  const app = getAppState();
-
-  // ── Hardware metrics ──────────────────────────────────────────────────────
-  let hw = $state<HardwareMetrics | null>(null);
-  let hwError = $state('');
-
-  async function loadHardware() {
-    if (!app.activeHostId) return;
-    try { hw = await api.getHardwareMetrics(app.activeHostId); }
-    catch (e) { hwError = String(e); }
-  }
-
-  function fmtBytes(b: number): string {
-    if (b < 1073741824) return `${(b / 1048576).toFixed(0)} MB`;
-    return `${(b / 1073741824).toFixed(1)} GB`;
-  }
-
-  // ── Own metrics (from /metrics) ───────────────────────────────────────────
-  interface MetricSample {
-    name: string;
-    labels: Record<string, string>;
-    value: number;
-    help: string;
-    type: string;
-  }
-
-  let rawMetrics   = $state('');
-  let samples      = $state<MetricSample[]>([]);
-  let metricsError = $state('');
-  let metricsLoading = $state(false);
-
-  function parsePrometheus(text: string): MetricSample[] {
-    const lines = text.split('\n');
-    const helps: Record<string, string> = {};
-    const types: Record<string, string> = {};
-    const result: MetricSample[] = [];
-
-    for (const line of lines) {
-      const t = line.trim();
-      if (!t || t.startsWith('#')) {
-        const parts = t.split(' ');
-        if (parts[1] === 'HELP') helps[parts[2]] = parts.slice(3).join(' ');
-        if (parts[1] === 'TYPE') types[parts[2]] = parts[3];
-        continue;
-      }
-      const brace = t.indexOf('{');
-      const space = t.lastIndexOf(' ');
-      if (space === -1) continue;
-      const valueStr = t.slice(space + 1);
-      const value = parseFloat(valueStr);
-      if (isNaN(value)) continue;
-      let name: string;
-      let labels: Record<string, string> = {};
-      if (brace !== -1 && brace < space) {
-        name = t.slice(0, brace);
-        const lStr = t.slice(brace + 1, t.lastIndexOf('}'));
-        for (const pair of lStr.matchAll(/(\w+)="([^"]*)"/g)) {
-          labels[pair[1]] = pair[2];
-        }
-      } else {
-        name = t.slice(0, space);
-      }
-      result.push({ name, labels, value, help: helps[name] ?? '', type: types[name] ?? '' });
+  $effect(() => {
+    const hostId = hostsStore.activeHostId;
+    if (hostId) {
+      metricsStore.startPolling(15000);
     }
-    return result;
-  }
-
-  async function loadMetrics() {
-    metricsLoading = true; metricsError = '';
-    try {
-      const resp = await fetch('/metrics');
-      rawMetrics = await resp.text();
-      samples = parsePrometheus(rawMetrics);
-    } catch (e) {
-      metricsError = String(e);
-    } finally {
-      metricsLoading = false;
-    }
-  }
+    return () => {
+      metricsStore.stopPolling();
+    };
+  });
 
   function getSample(name: string, labels?: Record<string, string>): number | null {
-    const s = samples.find(s => {
+    const s = metricsStore.samples.find((s) => {
       if (s.name !== name) return false;
       if (!labels) return true;
       return Object.entries(labels).every(([k, v]) => s.labels[k] === v);
@@ -94,53 +23,42 @@
   }
 
   function getSamples(name: string): MetricSample[] {
-    return samples.filter(s => s.name === name);
+    return metricsStore.samples.filter((s) => s.name === name);
   }
 
-  let uptime = $derived(getSample('pulse_uptime_seconds'));
-  let containersTotal = $derived(getSample('pulse_containers_total'));
-  let requestSamples = $derived(getSamples('pulse_http_requests_total'));
-  let eventSamples = $derived(getSamples('pulse_container_events_total'));
+  let uptime = $derived(getSample("pulse_uptime_seconds"));
+  let containersTotal = $derived(getSample("pulse_containers_total"));
+  let requestSamples = $derived(getSamples("pulse_http_requests_total"));
+  let eventSamples = $derived(getSamples("pulse_container_events_total"));
   let totalRequests = $derived(requestSamples.reduce((a, s) => a + s.value, 0));
 
-  function fmtUptime(s: number | null): string {
-    if (s === null) return '—';
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = Math.floor(s % 60);
-    if (h > 0) return `${h}h ${m}m`;
-    if (m > 0) return `${m}m ${sec}s`;
-    return `${sec}s`;
-  }
-
-  function fmtNum(n: number | null): string {
-    if (n === null) return '—';
-    return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
-  }
-
   // ── External Prometheus ───────────────────────────────────────────────────
-  let promUrl    = $state(localStorage.getItem('pulse-prom-url') ?? '');
-  let promQuery  = $state('');
+  let promUrl = $state(localStorage.getItem("pulse-prom-url") ?? "");
+  let promQuery = $state("");
   let promResult = $state<unknown>(null);
-  let promError  = $state('');
-  let promBusy   = $state(false);
+  let promError = $state("");
+  let promBusy = $state(false);
 
   const PRESET_QUERIES = [
-    { label: 'Container CPU %', q: 'rate(container_cpu_usage_seconds_total{name!=""}[1m]) * 100' },
-    { label: 'Container Memory (MB)', q: 'container_memory_usage_bytes{name!=""} / 1024 / 1024' },
-    { label: 'Container Net RX (kbps)', q: 'rate(container_network_receive_bytes_total[1m]) / 1024' },
-    { label: 'Container Net TX (kbps)', q: 'rate(container_network_transmit_bytes_total[1m]) / 1024' },
+    { label: "Container CPU %", q: 'rate(container_cpu_usage_seconds_total{name!=""}[1m]) * 100' },
+    { label: "Container Memory (MB)", q: 'container_memory_usage_bytes{name!=""} / 1024 / 1024' },
+    { label: "Container Net RX (kbps)", q: "rate(container_network_receive_bytes_total[1m]) / 1024" },
+    { label: "Container Net TX (kbps)", q: "rate(container_network_transmit_bytes_total[1m]) / 1024" },
   ];
 
   $effect(() => {
-    if (promUrl) localStorage.setItem('pulse-prom-url', promUrl);
+    if (promUrl) localStorage.setItem("pulse-prom-url", promUrl);
   });
 
   async function runPromQuery() {
     if (!promUrl || !promQuery) return;
-    promBusy = true; promError = ''; promResult = null;
+    promBusy = true;
+    promError = "";
+    promResult = null;
     try {
-      const resp = await fetch(`/api/prometheus/query?url=${encodeURIComponent(promUrl)}&q=${encodeURIComponent(promQuery)}`);
+      const resp = await fetch(
+        `/api/prometheus/query?url=${encodeURIComponent(promUrl)}&q=${encodeURIComponent(promQuery)}`
+      );
       promResult = await resp.json();
     } catch (e) {
       promError = String(e);
@@ -149,39 +67,47 @@
     }
   }
 
-  type PromData = { status: string; data: { resultType: string; result: Array<{ metric: Record<string, string>; value: [number, string] }> } };
+  type PromData = {
+    status: string;
+    data: {
+      resultType: string;
+      result: Array<{ metric: Record<string, string>; value: [number, string] }>;
+    };
+  };
 
   let promRows = $derived(() => {
-    if (!promResult || typeof promResult !== 'object') return [];
+    if (!promResult || typeof promResult !== "object") return [];
     const r = promResult as PromData;
-    if (r.status !== 'success') return [];
+    if (r.status !== "success") return [];
     return r.data?.result ?? [];
   });
-
-  onMount(() => { loadMetrics(); loadHardware(); });
-  const interval = setInterval(() => { loadMetrics(); loadHardware(); }, 15_000);
-  $effect(() => () => clearInterval(interval));
 </script>
 
 <!-- Hardware metrics -->
-{#if hw}
+{#if metricsStore.hw}
   <div class="hw-section">
     <div class="hw-card">
       <div class="hw-label">RAM</div>
       <div class="hw-bar-row">
         <div class="hw-bar-track">
-          <div class="hw-bar-fill" style="width:{hw.mem_pct.toFixed(1)}%; background: {hw.mem_pct > 85 ? 'var(--red)' : hw.mem_pct > 65 ? 'var(--amber)' : 'var(--accent)'}"></div>
+          <div
+            class="hw-bar-fill"
+            style="width:{metricsStore.hw.mem_pct.toFixed(1)}%; background: {metricsStore.hw.mem_pct > 85 ? 'var(--red)' : metricsStore.hw.mem_pct > 65 ? 'var(--amber)' : 'var(--accent)'}"
+          ></div>
         </div>
-        <span class="hw-pct">{hw.mem_pct.toFixed(1)}%</span>
+        <span class="hw-pct">{metricsStore.hw.mem_pct.toFixed(1)}%</span>
       </div>
-      <div class="hw-sub">{fmtBytes(hw.mem_used)} / {fmtBytes(hw.mem_total)}</div>
+      <div class="hw-sub">{fmtBytes(metricsStore.hw.mem_used)} / {fmtBytes(metricsStore.hw.mem_total)}</div>
     </div>
-    {#each hw.disks.slice(0, 4) as disk}
+    {#each metricsStore.hw.disks.slice(0, 4) as disk}
       <div class="hw-card">
-        <div class="hw-label">{disk.mount === '/' ? 'Root disk' : disk.mount}</div>
+        <div class="hw-label">{disk.mount === "/" ? "Root disk" : disk.mount}</div>
         <div class="hw-bar-row">
           <div class="hw-bar-track">
-            <div class="hw-bar-fill" style="width:{disk.pct.toFixed(1)}%; background: {disk.pct > 85 ? 'var(--red)' : disk.pct > 65 ? 'var(--amber)' : 'var(--green)'}"></div>
+            <div
+              class="hw-bar-fill"
+              style="width:{disk.pct.toFixed(1)}%; background: {disk.pct > 85 ? 'var(--red)' : disk.pct > 65 ? 'var(--amber)' : 'var(--green)'}"
+            ></div>
           </div>
           <span class="hw-pct">{disk.pct.toFixed(1)}%</span>
         </div>
@@ -189,8 +115,8 @@
       </div>
     {/each}
   </div>
-{:else if hwError}
-  <div class="err-box" style="margin-bottom:18px">{hwError}</div>
+{:else if metricsStore.hwError}
+  <div class="err-box" style="margin-bottom:18px">{metricsStore.hwError}</div>
 {/if}
 
 <!-- Pulse own metrics -->
@@ -221,26 +147,40 @@
   <div class="section-block">
     <div class="section-hdr">
       <h2>API activity</h2>
-      <button class="btn-ghost btn-sm" onclick={loadMetrics} disabled={metricsLoading}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/></svg>
+      <button class="btn-ghost btn-sm" onclick={() => metricsStore.loadPulseMetrics()} disabled={metricsStore.metricsLoading}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 12a9 9 0 1 0 2.6-6.4L3 8" />
+          <path d="M3 3v5h5" />
+        </svg>
         Refresh
       </button>
     </div>
-    {#if metricsError}
-      <div class="err-box">{metricsError}</div>
-    {:else if requestSamples.length === 0 && !metricsLoading}
+    {#if metricsStore.metricsError}
+      <div class="err-box">{metricsStore.metricsError}</div>
+    {:else if requestSamples.length === 0 && !metricsStore.metricsLoading}
       <div class="empty-hint">No requests recorded yet</div>
     {:else}
       <table class="m-table">
-        <thead><tr><th>Endpoint</th><th>Method</th><th>Status</th><th class="num">Count</th></tr></thead>
+        <thead>
+          <tr>
+            <th>Endpoint</th>
+            <th>Method</th>
+            <th>Status</th>
+            <th class="num">Count</th>
+          </tr>
+        </thead>
         <tbody>
           {#each requestSamples.sort((a, b) => b.value - a.value) as s (s.name + JSON.stringify(s.labels))}
             <tr>
-              <td class="mono small">{s.labels.endpoint ?? '—'}</td>
-              <td><span class="method-tag">{s.labels.method ?? '—'}</span></td>
+              <td class="mono small">{s.labels.endpoint ?? "—"}</td>
+              <td><span class="method-tag">{s.labels.method ?? "—"}</span></td>
               <td>
-                <span class="status-tag" class:ok={s.labels.status?.startsWith('2')} class:err={s.labels.status?.startsWith('4') || s.labels.status?.startsWith('5')}>
-                  {s.labels.status ?? '—'}
+                <span
+                  class="status-tag"
+                  class:ok={s.labels.status?.startsWith("2")}
+                  class:err={s.labels.status?.startsWith("4") || s.labels.status?.startsWith("5")}
+                >
+                  {s.labels.status ?? "—"}
                 </span>
               </td>
               <td class="num mono">{fmtNum(s.value)}</td>
@@ -258,11 +198,14 @@
     {:else}
       <div class="event-bars">
         {#each eventSamples as s}
-          {@const max = Math.max(...eventSamples.map(e => e.value), 1)}
+          {@const max = Math.max(...eventSamples.map((e) => e.value), 1)}
           <div class="ebar-row">
             <span class="ebar-label">{s.labels.event ?? s.name}</span>
             <div class="ebar-track">
-              <div class="ebar-fill" style="width:{(s.value / max * 100).toFixed(1)}%; background:{s.labels.event === 'start' ? 'var(--green)' : s.labels.event === 'crash' || s.labels.event === 'oom' ? 'var(--red)' : 'var(--amber)'}"></div>
+              <div
+                class="ebar-fill"
+                style="width:{(s.value / max * 100).toFixed(1)}%; background:{s.labels.event === 'start' ? 'var(--green)' : s.labels.event === 'crash' || s.labels.event === 'oom' ? 'var(--red)' : 'var(--amber)'}"
+              ></div>
             </div>
             <span class="ebar-val">{fmtNum(s.value)}</span>
           </div>
@@ -278,7 +221,7 @@
 </div>
 
 <!-- Webhooks reference -->
-{#if app.activeHostId}
+{#if hostsStore.activeHostId}
   <div class="ext-section" style="margin-bottom: 20px;">
     <div class="ext-hdr">
       <h2>Deployment webhooks</h2>
@@ -287,22 +230,22 @@
     <div class="webhook-list">
       <div class="wh-row">
         <span class="wh-badge container">container</span>
-        <code class="wh-url">/api/webhooks/{app.activeHostId}/&lt;container-id&gt;/recreate?pull=true</code>
+        <code class="wh-url">/api/webhooks/{hostsStore.activeHostId}/&lt;container-id&gt;/recreate?pull=true</code>
         <span class="wh-hint">Pull latest image and recreate container</span>
       </div>
       <div class="wh-row">
         <span class="wh-badge stack">stack</span>
-        <code class="wh-url">/api/webhooks/{app.activeHostId}/stacks/&lt;stack-id&gt;/redeploy?pull=true</code>
+        <code class="wh-url">/api/webhooks/{hostsStore.activeHostId}/stacks/&lt;stack-id&gt;/redeploy?pull=true</code>
         <span class="wh-hint">Pull latest images and docker compose up -d</span>
       </div>
       <div class="wh-row">
         <span class="wh-badge swarm">swarm</span>
-        <code class="wh-url">/api/webhooks/{app.activeHostId}/swarm/&lt;service-id&gt;/update</code>
+        <code class="wh-url">/api/webhooks/{hostsStore.activeHostId}/swarm/&lt;service-id&gt;/update</code>
         <span class="wh-hint">Force rolling update of a Swarm service</span>
       </div>
       <div class="wh-row">
         <span class="wh-badge k8s">k8s</span>
-        <code class="wh-url">/api/webhooks/{app.activeHostId}/k8s/&lt;namespace&gt;/&lt;deployment&gt;/rollout</code>
+        <code class="wh-url">/api/webhooks/{hostsStore.activeHostId}/k8s/&lt;namespace&gt;/&lt;deployment&gt;/rollout</code>
         <span class="wh-hint">Rollout restart a Kubernetes deployment</span>
       </div>
     </div>
@@ -325,12 +268,18 @@
           placeholder="http://prometheus:9090"
           bind:value={promUrl}
         />
-        <span class="prom-status" class:connected={!!promUrl}>{promUrl ? 'configured' : 'not set'}</span>
+        <span class="prom-status" class:connected={!!promUrl}>{promUrl ? "configured" : "not set"}</span>
       </div>
     </div>
     <div class="preset-row">
       {#each PRESET_QUERIES as pq}
-        <button class="preset-btn" onclick={() => { promQuery = pq.q; runPromQuery(); }}>
+        <button
+          class="preset-btn"
+          onclick={() => {
+            promQuery = pq.q;
+            runPromQuery();
+          }}
+        >
           {pq.label}
         </button>
       {/each}
@@ -341,7 +290,7 @@
         type="text"
         placeholder="PromQL query, e.g. up"
         bind:value={promQuery}
-        onkeydown={(e) => e.key === 'Enter' && runPromQuery()}
+        onkeydown={(e) => e.key === "Enter" && runPromQuery()}
       />
       <button class="btn-primary" onclick={runPromQuery} disabled={promBusy || !promUrl || !promQuery}>
         {#if promBusy}Running…{:else}Run query{/if}
