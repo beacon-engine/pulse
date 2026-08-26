@@ -1,788 +1,478 @@
 <script lang="ts">
-    import { onMount } from "svelte";
-    import ContainerDrawer from "./components/ContainerDrawer.svelte";
-    import EnvironmentSelector from "./components/EnvironmentSelector.svelte";
-    import AddEnvironmentModal from "./components/AddEnvironmentModal.svelte";
-    import AuthScreen from "./components/AuthScreen.svelte";
-    import UsersPage from "./pages/UsersPage.svelte";
-    import HostsPage from "./pages/HostsPage.svelte";
-    import { api, type Account } from "./lib/api";
-    import { setAppState } from "./lib/appContext";
-    import { connect } from "./lib/websocket";
-    import {
-        currentRoute,
-        initRouter,
-        navigate,
-        type Route,
-    } from "./lib/router";
-    import ContainersPage from "./pages/ContainersPage.svelte";
-    import StacksPage from "./pages/StacksPage.svelte";
-    import EventsPage from "./pages/EventsPage.svelte";
-    import KubernetesPage from "./pages/KubernetesPage.svelte";
-    import MetricsPage from "./pages/MetricsPage.svelte";
-    import ResourcesPage from "./pages/ResourcesPage.svelte";
-    import SwarmPage from "./pages/SwarmPage.svelte";
-    import type {
-        Container,
-        ContainerEvent,
-        K8sNamespace,
-        K8sPod,
-        SavedStack,
-        Stack,
-        SwarmNode,
-        SwarmService,
-    } from "./types/containers";
-    import type { Environment } from "./types/environments";
-    import type { AppState } from "./types/appState";
-    import SwarmDrawer from "./components/SwarmDrawer.svelte";
+  import { onMount } from "svelte";
+  import ContainerDrawer from "./components/ContainerDrawer.svelte";
+  import SwarmDrawer from "./components/SwarmDrawer.svelte";
+  import EnvironmentSelector from "./components/EnvironmentSelector.svelte";
+  import AddEnvironmentModal from "./components/AddEnvironmentModal.svelte";
+  import AuthScreen from "./components/AuthScreen.svelte";
+  import TopLoader from "./components/TopLoader.svelte";
 
-    // ── Theme ─────────────────────────────────────────────────────────────────
-    let theme = $state<"light" | "dark">("light");
-    $effect(() => {
-        document.documentElement.setAttribute("data-theme", theme);
-    });
-    function toggleTheme() {
-        theme = theme === "light" ? "dark" : "light";
+  import UsersPage from "./pages/UsersPage.svelte";
+  import HostsPage from "./pages/HostsPage.svelte";
+  import ContainersPage from "./pages/ContainersPage.svelte";
+  import StacksPage from "./pages/StacksPage.svelte";
+  import EventsPage from "./pages/EventsPage.svelte";
+  import KubernetesPage from "./pages/KubernetesPage.svelte";
+  import MetricsPage from "./pages/MetricsPage.svelte";
+  import ResourcesPage from "./pages/ResourcesPage.svelte";
+  import SwarmPage from "./pages/SwarmPage.svelte";
+
+  import { api, type Account } from "./lib/api";
+  import { connect } from "./lib/websocket";
+  import { currentRoute, initRouter, navigate, type Route } from "./lib/router";
+  import { hostsStore } from "./stores/hosts.svelte";
+  import { containersStore } from "./stores/container.svelte";
+  import { swarmStore } from "./stores/swarm.svelte";
+  import { loadingStore } from "./stores/loading.svelte";
+  import { toast } from "./lib/toast.svelte";
+  import { debounce } from "./lib/timing";
+  import type { Container } from "./types/containers";
+  import type { Environment } from "./types/environments";
+
+  // ── Theme ─────────────────────────────────────────────────────────────────
+  let theme = $state<"light" | "dark">("light");
+  $effect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+  });
+  function toggleTheme() {
+    theme = theme === "light" ? "dark" : "light";
+  }
+
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  let account = $state<Account | null>(null);
+  let authReady = $state(false);
+  let wsDisconnect: (() => void) | null = null;
+
+  // ── Navigation ────────────────────────────────────────────────────────────
+  let route = $state<Route>("containers");
+  currentRoute.subscribe((r) => {
+    route = r;
+    loadingStore.reset(); // Reset in-flight loader counter on route transitions
+  });
+
+  const NAV: { id: Route; label: string; icon: string }[] = [
+    {
+      id: "containers",
+      label: "Containers",
+      icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M3 11h18M8 7V4.5A1.5 1.5 0 0 1 9.5 3h5A1.5 1.5 0 0 1 16 4.5V7"/></svg>`,
+    },
+    {
+      id: "stacks",
+      label: "Stacks",
+      icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.4"/><rect x="14" y="3" width="7" height="7" rx="1.4"/><rect x="3" y="14" width="7" height="7" rx="1.4"/><rect x="14" y="14" width="7" height="7" rx="1.4"/></svg>`,
+    },
+    {
+      id: "swarm",
+      label: "Swarm",
+      icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="5" r="2"/><circle cx="19" cy="9" r="2"/><circle cx="19" cy="15" r="2"/><circle cx="12" cy="19" r="2"/><circle cx="5" cy="15" r="2"/><circle cx="5" cy="9" r="2"/><path d="M7 9l4-2.5M13 9l4 2.5M17 15l-4 2.5M11 15l-4-2.5"/></svg>`,
+    },
+    {
+      id: "events",
+      label: "Events",
+      icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>`,
+    },
+    {
+      id: "metrics",
+      label: "Metrics",
+      icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>`,
+    },
+    {
+      id: "resources",
+      label: "Resources",
+      icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
+    },
+    {
+      id: "kubernetes",
+      label: "Kubernetes",
+      icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2L20 6.5V17.5L12 22L4 17.5V6.5L12 2Z"/><path d="M12 22V12M20 6.5L12 12M4 6.5L12 12"/></svg>`,
+    },
+  ];
+
+  const USERS_NAV: { id: Route; label: string; icon: string } = {
+    id: "users",
+    label: "Users",
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13A4 4 0 0 1 16 11"/></svg>`,
+  };
+
+  let navItems = $derived(
+    account?.role === "admin" ? [...NAV, USERS_NAV] : NAV
+  );
+
+  // ── Modals ────────────────────────────────────────────────────────────────
+  let showAddHost = $state(false);
+
+  // ── Command palette ───────────────────────────────────────────────────────
+  let cmdkOpen = $state(false);
+  let cmdkQuery = $state("");
+  let cmdkSel = $state(0);
+  let cmdkResults = $derived(
+    containersStore.containers
+      .filter(
+        (c) =>
+          !cmdkQuery.trim() ||
+          c.name.toLowerCase().includes(cmdkQuery.toLowerCase()) ||
+          c.image.toLowerCase().includes(cmdkQuery.toLowerCase())
+      )
+      .slice(0, 8)
+  );
+
+  function openCmdk() {
+    cmdkOpen = true;
+    cmdkQuery = "";
+    cmdkSel = 0;
+  }
+  function closeCmdk() {
+    cmdkOpen = false;
+  }
+  function cmdkSelect(c: Container) {
+    containersStore.selectContainer(c);
+    navigate("containers");
+    closeCmdk();
+  }
+
+  // ── Host Actions ──────────────────────────────────────────────────────────
+  async function handleSwitchHost(host: Environment) {
+    hostsStore.switchHost(host);
+  }
+
+  async function handleRenameHost(id: string, name: string) {
+    await api.renameHost(id, name);
+    await hostsStore.loadHosts();
+    toast.success(`Host renamed to "${name}"`);
+  }
+
+  async function handleDeleteHost(id: string) {
+    await api.deleteHost(id);
+    await hostsStore.loadHosts();
+    toast.info("Host removed");
+  }
+
+  // ── WebSocket Handler ──────────────────────────────────────────────────────
+  const handleSocketEvent = debounce(() => {
+    // Only trigger live container refreshes when viewing the containers screen
+    if (route === "containers") {
+      containersStore.refresh();
     }
+  }, 1000);
 
-    // ── Auth ──────────────────────────────────────────────────────────────────
-    let account = $state<Account | null>(null);
-    let authReady = $state(false);
-    let wsDisconnect: (() => void) | null = null;
-    let pollTimer: ReturnType<typeof setInterval> | null = null;
+  // ── Boot / teardown ────────────────────────────────────────────────────────
+  async function boot() {
+    await hostsStore.loadHosts();
+    // wsDisconnect = connect(handleSocketEvent);
+  }
 
-    // ── Navigation ────────────────────────────────────────────────────────────
-    let route = $state<Route>("containers");
-    currentRoute.subscribe((r) => (route = r));
-
-    const NAV: { id: Route; label: string; icon: string }[] = [
-        {
-            id: "containers",
-            label: "Containers",
-            icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M3 11h18M8 7V4.5A1.5 1.5 0 0 1 9.5 3h5A1.5 1.5 0 0 1 16 4.5V7"/></svg>`,
-        },
-        {
-            id: "stacks",
-            label: "Stacks",
-            icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.4"/><rect x="14" y="3" width="7" height="7" rx="1.4"/><rect x="3" y="14" width="7" height="7" rx="1.4"/><rect x="14" y="14" width="7" height="7" rx="1.4"/></svg>`,
-        },
-        {
-            id: "swarm",
-            label: "Swarm",
-            icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="5" r="2"/><circle cx="19" cy="9" r="2"/><circle cx="19" cy="15" r="2"/><circle cx="12" cy="19" r="2"/><circle cx="5" cy="15" r="2"/><circle cx="5" cy="9" r="2"/><path d="M7 9l4-2.5M13 9l4 2.5M17 15l-4 2.5M11 15l-4-2.5"/></svg>`,
-        },
-        {
-            id: "events",
-            label: "Events",
-            icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>`,
-        },
-        {
-            id: "metrics",
-            label: "Metrics",
-            icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>`,
-        },
-        {
-            id: "resources",
-            label: "Resources",
-            icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
-        },
-        {
-            id: "kubernetes",
-            label: "Kubernetes",
-            icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2L20 6.5V17.5L12 22L4 17.5V6.5L12 2Z"/><path d="M12 22V12M20 6.5L12 12M4 6.5L12 12"/></svg>`,
-        },
-    ];
-
-    const USERS_NAV: { id: Route; label: string; icon: string } = {
-        id: "users",
-        label: "Users",
-        icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13A4 4 0 0 1 16 11"/></svg>`,
-    };
-    // Only admins see the Users section.
-    let navItems = $derived(
-        account?.role === "admin" ? [...NAV, USERS_NAV] : NAV,
-    );
-
-    // ── Hosts ─────────────────────────────────────────────────────────────────
-    // `hosts` is only the compact list shown in the sidebar (first page). The full,
-    // paginated list lives on the Hosts page. `activeHostObj` keeps the active host
-    // resolvable even when it isn't in the sidebar page.
-    const SIDEBAR_HOSTS = 8;
-    let hosts = $state<Environment[]>([]);
-    let totalHosts = $state(0);
-    let activeHostId = $state<string | null>(null);
-    let activeHostObj = $state<Environment | null>(null);
-    let showAddHost = $state(false);
-    let activeHost = $derived(
-        hosts.find((h) => h.id === activeHostId) ?? activeHostObj,
-    );
-
-    // ── Data ──────────────────────────────────────────────────────────────────
-    let containers = $state<Container[]>([]);
-    let stacks = $state<Stack[]>([]);
-    let savedStacks = $state<SavedStack[]>([]);
-    let events = $state<ContainerEvent[]>([]);
-    let pods = $state<K8sPod[]>([]);
-    let namespaces = $state<K8sNamespace[]>([]);
-    let swarmServices = $state<SwarmService[]>([]);
-    let swarmNodes = $state<SwarmNode[]>([]);
-    let loading = $state(true);
-    let k8sLoading = $state(false);
-    let swarmLoading = $state(false);
-    let error = $state("");
-    let k8sError = $state("");
-    let swarmError = $state("");
-    let lastUpdated = $state("");
-
-    let running = $derived(
-        containers.filter((c) => c.state === "running").length,
-    );
-
-    // ── Command palette ───────────────────────────────────────────────────────
-    let cmdkOpen = $state(false);
-    let cmdkQuery = $state("");
-    let cmdkSel = $state(0);
-    let cmdkResults = $derived(
-        containers
-            .filter(
-                (c) =>
-                    !cmdkQuery.trim() ||
-                    c.name.toLowerCase().includes(cmdkQuery.toLowerCase()) ||
-                    c.image.toLowerCase().includes(cmdkQuery.toLowerCase()),
-            )
-            .slice(0, 8),
-    );
-
-    function openCmdk() {
-        cmdkOpen = true;
-        cmdkQuery = "";
-        cmdkSel = 0;
+  function teardown() {
+    if (wsDisconnect) {
+      wsDisconnect();
+      wsDisconnect = null;
     }
-    function closeCmdk() {
-        cmdkOpen = false;
+  }
+
+  async function onAuthed(u: Account) {
+    account = u;
+    authReady = true;
+    await boot();
+  }
+
+  async function logout() {
+    try {
+      await api.logout();
+    } catch {
+      /* ignore */
     }
-    function cmdkSelect(c: Container) {
-        state.selectedContainer = c;
-        navigate("containers");
+    teardown();
+    account = null;
+    if (route === "users") navigate("containers");
+  }
+
+  onMount(() => {
+    const stopRouter = initRouter();
+
+    function onkey(e: KeyboardEvent) {
+      if (!account) return;
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        openCmdk();
+        return;
+      }
+      if (e.key === "Escape") {
         closeCmdk();
-    }
-
-    // ── Toasts ────────────────────────────────────────────────────────────────
-    type Toast = { id: number; msg: string; kind: "ok" | "warn" | "err" };
-    let toasts = $state<Toast[]>([]);
-    let _tid = 0;
-    function toast(msg: string, kind: Toast["kind"] = "ok") {
-        const id = ++_tid;
-        toasts = [...toasts, { id, msg, kind }];
-        setTimeout(() => {
-            toasts = toasts.filter((t) => t.id !== id);
-        }, 3500);
-    }
-
-    // ── Fetching ──────────────────────────────────────────────────────────────
-    async function refresh() {
-        const id = activeHostId;
-        if (id === null) {
-            loading = false;
-            return;
+        return;
+      }
+      if (cmdkOpen) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          cmdkSel = Math.min(cmdkSel + 1, cmdkResults.length - 1);
         }
-        try {
-            const [c, d, s, e] = await Promise.all([
-                api.getContainers(id),
-                api.getDetectedStacks(id),
-                api.getSavedStacks(id),
-                api.getEvents(),
-            ]);
-            containers = c;
-            stacks = d;
-            savedStacks = s;
-            events = e;
-            error = "";
-            lastUpdated = new Date().toLocaleTimeString();
-        } catch (err) {
-            error = String(err);
-        } finally {
-            loading = false;
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          cmdkSel = Math.max(cmdkSel - 1, 0);
         }
-    }
-
-    async function refreshK8s() {
-        k8sLoading = true;
-        k8sError = "";
-        try {
-            const [p, n] = await Promise.all([
-                api.getK8sPods(),
-                api.getK8sNamespaces(),
-            ]);
-            pods = p;
-            namespaces = n;
-        } catch (err) {
-            k8sError = String(err);
-        } finally {
-            k8sLoading = false;
+        if (e.key === "Enter" && cmdkResults[cmdkSel]) {
+          cmdkSelect(cmdkResults[cmdkSel]);
         }
+      }
     }
+    window.addEventListener("keydown", onkey);
 
-    async function refreshSwarm() {
-        const id = activeHostId;
-        if (id === null) {
-            swarmLoading = false;
-            return;
-        }
-        swarmLoading = true;
-        swarmError = "";
-        try {
-            const [s, n] = await Promise.all([
-                api.getSwarmServices(id),
-                api.getSwarmNodes(id),
-            ]);
-            swarmServices = s;
-            swarmNodes = n;
-        } catch (err) {
-            swarmError = String(err);
-        } finally {
-            swarmLoading = false;
-        }
-    }
+    const onUnauth = () => {
+      teardown();
+      account = null;
+    };
+    window.addEventListener("pulse:unauthorized", onUnauth);
 
-    async function switchHost(host: Environment) {
-        activeHostObj = host; // keep resolvable even if not in the sidebar page
-        // Ensure the selected host is visible in the compact sidebar list.
-        if (!hosts.some((h) => h.id === host.id))
-            hosts = [host, ...hosts].slice(0, SIDEBAR_HOSTS);
-        if (host.id === activeHostId) return;
-        activeHostId = host.id;
-        loading = true;
-        containers = [];
-        stacks = [];
-        state.selectedContainer = null;
-        await refresh();
-    }
-
-    async function loadHosts() {
-        try {
-            const p = await api.listHosts({ perPage: SIDEBAR_HOSTS });
-            hosts = p.items;
-            totalHosts = p.total;
-            if (activeHostId === null && hosts.length > 0) {
-                const initial = hosts.find((h) => h.is_local) ?? hosts[0];
-                activeHostId = initial.id;
-                activeHostObj = initial;
-            }
-        } catch (e) {
-            error = String(e);
-        }
-    }
-
-    async function renameHost(id: string, name: string) {
-        await api.renameHost(id, name);
-        await loadHosts();
-        toast(`Host renamed to "${name}"`);
-    }
-
-    async function deleteHost(id: string) {
-        await api.deleteHost(id);
-        if (activeHostId === id) {
-            activeHostId = null;
-            containers = [];
-            stacks = [];
-        }
-        await loadHosts();
-        if (activeHostId !== null) await refresh();
-        toast("Host removed", "warn");
-    }
-
-    // Container actions
-    async function startContainer(id: string) {
-        await api.startContainer(activeHostId!, id);
-        toast("Container started");
-        await refresh();
-    }
-    async function stopContainer(id: string) {
-        await api.stopContainer(activeHostId!, id);
-        toast("Container stopped", "warn");
-        await refresh();
-    }
-    async function restartContainer(id: string) {
-        await api.restartContainer(activeHostId!, id);
-        toast("Container restarted");
-        await refresh();
-    }
-
-    // ── Shared state for pages ────────────────────────────────────────────────
-    let state = $state<AppState>({
-        hosts,
-        activeHostId,
-        activeHost,
-        selectedContainer: null,
-        selectedSwarmService: null,
-        containers,
-        stacks,
-        savedStacks,
-        events,
-        pods,
-        namespaces,
-        swarmServices,
-        swarmNodes,
-        loading,
-        k8sLoading,
-        swarmLoading,
-        error,
-        k8sError,
-        swarmError,
-        lastUpdated,
-        refresh,
-        refreshK8s,
-        refreshSwarm,
-        switchHost,
-        startContainer,
-        stopContainer,
-        restartContainer,
-        toast,
-    });
-    setAppState(state);
-
-    $effect(() => {
-        state.hosts = hosts;
-        state.activeHostId = activeHostId;
-        state.activeHost = activeHost;
-        state.containers = containers;
-        state.stacks = stacks;
-        state.savedStacks = savedStacks;
-        state.events = events;
-        state.pods = pods;
-        state.namespaces = namespaces;
-        state.swarmServices = swarmServices;
-        state.swarmNodes = swarmNodes;
-        state.loading = loading;
-        state.k8sLoading = k8sLoading;
-        state.swarmLoading = swarmLoading;
-        state.error = error;
-        state.k8sError = k8sError;
-        state.swarmError = swarmError;
-        state.lastUpdated = lastUpdated;
-    });
-
-    $effect(() => {
-        if (route === "kubernetes") refreshK8s();
-        if (route === "swarm") refreshSwarm();
-    });
-
-    // ── Boot / teardown (only while authenticated) ─────────────────────────────
-    async function boot() {
-        await loadHosts();
-        await refresh();
-        if (route === "kubernetes") await refreshK8s();
-        if (route === "swarm") await refreshSwarm();
-        wsDisconnect = connect(() => refresh());
-        pollTimer = setInterval(() => {
-            refresh();
-            if (route === "kubernetes") refreshK8s();
-            if (route === "swarm") refreshSwarm();
-        }, 10_000);
-    }
-
-    function teardown() {
-        if (wsDisconnect) {
-            wsDisconnect();
-            wsDisconnect = null;
-        }
-        if (pollTimer) {
-            clearInterval(pollTimer);
-            pollTimer = null;
-        }
-    }
-
-    async function onAuthed(u: Account) {
-        account = u;
-        authReady = true;
-        await boot();
-    }
-
-    async function logout() {
-        try {
-            await api.logout();
-        } catch {
-            /* ignore */
-        }
-        teardown();
+    (async () => {
+      try {
+        account = await api.me();
+      } catch {
         account = null;
-        if (route === "users") navigate("containers");
-    }
+      }
+      authReady = true;
+      if (account) await boot();
+    })();
 
-    onMount(() => {
-        const stopRouter = initRouter();
-
-        function onkey(e: KeyboardEvent) {
-            if (!account) return;
-            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-                e.preventDefault();
-                openCmdk();
-                return;
-            }
-            if (e.key === "Escape") {
-                closeCmdk();
-                return;
-            }
-            if (cmdkOpen) {
-                if (e.key === "ArrowDown") {
-                    e.preventDefault();
-                    cmdkSel = Math.min(cmdkSel + 1, cmdkResults.length - 1);
-                }
-                if (e.key === "ArrowUp") {
-                    e.preventDefault();
-                    cmdkSel = Math.max(cmdkSel - 1, 0);
-                }
-                if (e.key === "Enter" && cmdkResults[cmdkSel])
-                    cmdkSelect(cmdkResults[cmdkSel]);
-            }
-        }
-        window.addEventListener("keydown", onkey);
-
-        // Drop back to the login screen if any request 401s mid-session.
-        const onUnauth = () => {
-            teardown();
-            account = null;
-        };
-        window.addEventListener("pulse:unauthorized", onUnauth);
-
-        // Restore an existing session, if any.
-        (async () => {
-            try {
-                account = await api.me();
-            } catch {
-                account = null;
-            }
-            authReady = true;
-            if (account) await boot();
-        })();
-
-        return () => {
-            stopRouter();
-            teardown();
-            window.removeEventListener("keydown", onkey);
-            window.removeEventListener("pulse:unauthorized", onUnauth);
-        };
-    });
+    return () => {
+      stopRouter();
+      teardown();
+      window.removeEventListener("keydown", onkey);
+      window.removeEventListener("pulse:unauthorized", onUnauth);
+    };
+  });
 </script>
 
+<TopLoader />
+
 {#if !authReady}
-    <div class="app-boot">Loading…</div>
+  <div class="app-boot">Loading…</div>
 {:else if !account}
-    <AuthScreen {onAuthed} />
+  <AuthScreen {onAuthed} />
 {:else}
-    <!-- ── Drawer ───────────────────────────────────────────────────────────── -->
-    {#if state.selectedContainer && state.activeHostId !== null}
-        <ContainerDrawer
-            hostId={state.activeHostId}
-            container={state.selectedContainer}
-            onclose={() => (state.selectedContainer = null)}
-            onrefresh={refresh}
-        />
-    {/if}
+  <!-- ── Container Drawer ────────────────────────────────────────────────── -->
+  {#if containersStore.selectedContainer && hostsStore.activeHostId}
+    <ContainerDrawer
+      hostId={hostsStore.activeHostId}
+      container={containersStore.selectedContainer}
+      onclose={() => containersStore.selectContainer(null)}
+      onrefresh={() => containersStore.refresh()}
+    />
+  {/if}
 
-    <!-- ── Swarm Drawer ───────────────────────────────────────────────────────────── -->
-    {#if state.selectedSwarmService && state.activeHostId !== null}
-        <SwarmDrawer
-            hostId={state.activeHostId}
-            swarm={state.selectedSwarmService}
-            onclose={() => (state.selectedSwarmService = null)}
-            onrefresh={refresh}
-        />
-    {/if}
+  <!-- ── Swarm Drawer ────────────────────────────────────────────────────── -->
+  {#if swarmStore.selectedService && hostsStore.activeHostId}
+    <SwarmDrawer
+      hostId={hostsStore.activeHostId}
+      swarm={swarmStore.selectedService}
+      onclose={() => swarmStore.selectService(null)}
+      onrefresh={() => swarmStore.refresh()}
+    />
+  {/if}
 
-    <!-- ── Add host modal ────────────────────────────────────────────────────── -->
-    {#if showAddHost}
-        <AddEnvironmentModal
-            onclose={() => (showAddHost = false)}
-            oncreated={async () => {
-                showAddHost = false;
-                await loadHosts();
-                await refresh();
-            }}
-        />
-    {/if}
+  <!-- ── Add host modal ─────────────────────────────────────────────────── -->
+  {#if showAddHost}
+    <AddEnvironmentModal
+      onclose={() => (showAddHost = false)}
+      oncreated={async () => {
+        showAddHost = false;
+        await hostsStore.loadHosts();
+      }}
+    />
+  {/if}
 
-    <!-- ── Command palette ───────────────────────────────────────────────────── -->
-    {#if cmdkOpen}
-        <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-        <div
-            class="cmdk-overlay"
-            onclick={(e) => {
-                if (e.target === e.currentTarget) closeCmdk();
-            }}
-        >
-            <div class="cmdk-box">
-                <div class="cmdk-input-wrap">
-                    <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        ><circle cx="11" cy="11" r="7" /><path
-                            d="M21 21l-4.3-4.3"
-                        /></svg
-                    >
-                    <!-- svelte-ignore a11y_autofocus -->
-                    <input
-                        class="cmdk-input"
-                        type="text"
-                        placeholder="Search containers…"
-                        bind:value={cmdkQuery}
-                        autofocus
-                        autocomplete="off"
-                    />
-                    <kbd>esc</kbd>
-                </div>
-                <div class="cmdk-list">
-                    {#if cmdkResults.length === 0}
-                        <div class="cmdk-empty">
-                            No containers match your search
-                        </div>
-                    {:else}
-                        {#each cmdkResults as c, i (c.id)}
-                            <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-                            <div
-                                class="cmdk-row"
-                                class:sel={i === cmdkSel}
-                                onclick={() => cmdkSelect(c)}
-                            >
-                                <div class="cmdk-icon">
-                                    <svg
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="1.8"
-                                        ><rect
-                                            x="3"
-                                            y="7"
-                                            width="18"
-                                            height="13"
-                                            rx="2"
-                                        /><path
-                                            d="M3 11h18M8 7V4.5A1.5 1.5 0 0 1 9.5 3h5A1.5 1.5 0 0 1 16 4.5V7"
-                                        /></svg
-                                    >
-                                </div>
-                                <div class="cmdk-nm">{c.name}</div>
-                                <div class="cmdk-ty">{c.state}</div>
-                            </div>
-                        {/each}
-                    {/if}
-                </div>
-            </div>
+  <!-- ── Command palette ────────────────────────────────────────────────── -->
+  {#if cmdkOpen}
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div
+      class="cmdk-overlay"
+      onclick={(e) => {
+        if (e.target === e.currentTarget) closeCmdk();
+      }}
+    >
+      <div class="cmdk-box">
+        <div class="cmdk-input-wrap">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" />
+          </svg>
+          <!-- svelte-ignore a11y_autofocus -->
+          <input
+            class="cmdk-input"
+            type="text"
+            placeholder="Search containers…"
+            bind:value={cmdkQuery}
+            autofocus
+            autocomplete="off"
+          />
+          <kbd>esc</kbd>
         </div>
-    {/if}
-
-    <!-- ── Toast stack ───────────────────────────────────────────────────────── -->
-    <div class="toast-stack">
-        {#each toasts as t (t.id)}
-            <div class="toast toast-{t.kind}">
-                <span class="toast-ic">
-                    {#if t.kind === "ok"}
-                        <svg
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="white"
-                            stroke-width="2.4"><path d="M5 13l4 4 10-10" /></svg
-                        >
-                    {:else if t.kind === "warn"}
-                        <svg
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="white"
-                            stroke-width="2.4"
-                            ><path d="M12 8v5M12 16h.01" /><path
-                                d="M12 3L22 20H2L12 3z"
-                            /></svg
-                        >
-                    {:else}
-                        <svg
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="white"
-                            stroke-width="2.4"
-                            ><path d="M6 6l12 12M18 6 6 18" /></svg
-                        >
-                    {/if}
-                </span>
-                <span>{t.msg}</span>
-            </div>
-        {/each}
-    </div>
-
-    <!-- ── App shell ─────────────────────────────────────────────────────────── -->
-    <div class="app">
-        <!-- ── Sidebar ────────────────────────────────────────────────────────── -->
-        <nav class="sidebar">
-            <div class="brand">
-                <div class="brand-mark">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
-                        ><path
-                            d="M3 16L12 20L21 16M3 12L12 16L21 12M12 3L21 8L12 13L3 8L12 3Z"
-                            stroke="white"
-                            stroke-width="1.8"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                        /></svg
-                    >
+        <div class="cmdk-list">
+          {#if cmdkResults.length === 0}
+            <div class="cmdk-empty">No containers match your search</div>
+          {:else}
+            {#each cmdkResults as c, i (c.id)}
+              <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+              <div
+                class="cmdk-row"
+                class:sel={i === cmdkSel}
+                onclick={() => cmdkSelect(c)}
+              >
+                <div class="cmdk-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                    <rect x="3" y="7" width="18" height="13" rx="2" />
+                    <path d="M3 11h18M8 7V4.5A1.5 1.5 0 0 1 9.5 3h5A1.5 1.5 0 0 1 16 4.5V7" />
+                  </svg>
                 </div>
-                <div>
-                    <div class="brand-name">Pulse</div>
-                    <div class="brand-sub">Fleet Console</div>
-                </div>
-            </div>
-
-            <div class="nav-section-label">Monitor</div>
-            {#each navItems as item}
-                <button
-                    class="nav-item"
-                    class:active={route === item.id}
-                    onclick={() => navigate(item.id)}
-                >
-                    {@html item.icon}
-                    {item.label}
-                    {#if item.id === "containers" && running > 0}
-                        <span class="nav-badge">{running}</span>
-                    {/if}
-                </button>
+                <div class="cmdk-nm">{c.name}</div>
+                <div class="cmdk-ty">{c.state}</div>
+              </div>
             {/each}
-
-            <EnvironmentSelector
-                {hosts}
-                total={totalHosts}
-                activeId={activeHostId}
-                onselect={switchHost}
-                onadd={() => (showAddHost = true)}
-                ondelete={deleteHost}
-                onrename={renameHost}
-                onseeall={() => navigate("hosts")}
-            />
-
-            <div class="sidebar-footer">
-                {#if account}
-                    <div class="user-chip">
-                        <span class="user-avatar"
-                            >{account.username.slice(0, 1).toUpperCase()}</span
-                        >
-                        <div class="user-meta">
-                            <div class="user-name">{account.username}</div>
-                            <div class="user-role">{account.role}</div>
-                        </div>
-                        <button
-                            class="logout-btn"
-                            title="Sign out"
-                            onclick={logout}
-                            aria-label="Sign out"
-                        >
-                            <svg
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="1.8"
-                                ><path
-                                    d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"
-                                /><path d="M16 17l5-5-5-5M21 12H9" /></svg
-                            >
-                        </button>
-                    </div>
-                {/if}
-                <div class="version">Pulse v0.1.0</div>
-            </div>
-        </nav>
-
-        <!-- ── Main ──────────────────────────────────────────────────────────── -->
-        <div class="main">
-            <!-- Topbar -->
-            <div class="topbar">
-                <div class="topbar-left">
-                    <h1>
-                        {navItems.find((n) => n.id === route)?.label ??
-                            (route === "hosts" ? "Hosts" : "")}
-                    </h1>
-                    <div class="topbar-sub">
-                        {activeHost?.name ?? ""}
-                        {lastUpdated ? ` · updated ${lastUpdated}` : ""}
-                        {#if error}<span class="topbar-err">{error}</span>{/if}
-                    </div>
-                </div>
-                <button class="search-trigger" onclick={openCmdk}>
-                    <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        ><circle cx="11" cy="11" r="7" /><path
-                            d="M21 21l-4.3-4.3"
-                        /></svg
-                    >
-                    Search containers…
-                    <kbd>⌘K</kbd>
-                </button>
-                <button
-                    class="icon-btn"
-                    onclick={toggleTheme}
-                    title="Toggle theme"
-                >
-                    {#if theme === "light"}
-                        <svg
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="1.8"
-                            ><path
-                                d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"
-                            /></svg
-                        >
-                    {:else}
-                        <svg
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="1.8"
-                            ><circle cx="12" cy="12" r="4.5" /><path
-                                d="M12 2v2.5M12 19.5V22M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2 12h2.5M19.5 12H22M4.2 19.8l1.8-1.8M18 6l1.8-1.8"
-                            /></svg
-                        >
-                    {/if}
-                </button>
-                <button class="icon-btn" onclick={refresh} title="Refresh">
-                    <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="1.8"
-                        ><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8" /><path
-                            d="M3 3v5h5"
-                        /></svg
-                    >
-                </button>
-            </div>
-
-            <!-- Content -->
-            <div class="content">
-                {#if route === "containers"}
-                    <ContainersPage />
-                {:else if route === "stacks"}
-                    <StacksPage />
-                {:else if route === "events"}
-                    <EventsPage />
-                {:else if route === "metrics"}
-                    <MetricsPage />
-                {:else if route === "resources"}
-                    <ResourcesPage />
-                {:else if route === "swarm"}
-                    <SwarmPage />
-                {:else if route === "kubernetes"}
-                    <KubernetesPage />
-                {:else if route === "users" && account}
-                    <UsersPage me={account} />
-                {:else if route === "hosts"}
-                    <HostsPage />
-                {/if}
-            </div>
+          {/if}
         </div>
+      </div>
     </div>
+  {/if}
+
+  <!-- ── App shell ──────────────────────────────────────────────────────── -->
+  <div class="app">
+    <!-- ── Sidebar ─────────────────────────────────────────────────────── -->
+    <nav class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M3 16L12 20L21 16M3 12L12 16L21 12M12 3L21 8L12 13L3 8L12 3Z"
+              stroke="white"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </div>
+        <div>
+          <div class="brand-name">Pulse</div>
+          <div class="brand-sub">Fleet Console</div>
+        </div>
+      </div>
+
+      <div class="nav-section-label">Monitor</div>
+      {#each navItems as item}
+        <button
+          class="nav-item"
+          class:active={route === item.id}
+          onclick={() => navigate(item.id)}
+        >
+          {@html item.icon}
+          {item.label}
+          {#if item.id === "containers" && containersStore.runningCount > 0}
+            <span class="nav-badge">{containersStore.runningCount}</span>
+          {/if}
+        </button>
+      {/each}
+
+      <EnvironmentSelector
+        hosts={hostsStore.hosts}
+        total={hostsStore.totalHosts}
+        activeId={hostsStore.activeHostId}
+        onselect={handleSwitchHost}
+        onadd={() => (showAddHost = true)}
+        ondelete={handleDeleteHost}
+        onrename={handleRenameHost}
+        onseeall={() => navigate("hosts")}
+      />
+
+      <div class="sidebar-footer">
+        {#if account}
+          <div class="user-chip">
+            <span class="user-avatar">
+              {account.username.slice(0, 1).toUpperCase()}
+            </span>
+            <div class="user-meta">
+              <div class="user-name">{account.username}</div>
+              <div class="user-role">{account.role}</div>
+            </div>
+            <button
+              class="logout-btn"
+              title="Sign out"
+              onclick={logout}
+              aria-label="Sign out"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                <path d="M16 17l5-5-5-5M21 12H9" />
+              </svg>
+            </button>
+          </div>
+        {/if}
+        <div class="version">Pulse v0.1.0</div>
+      </div>
+    </nav>
+
+    <!-- ── Main ───────────────────────────────────────────────────────── -->
+    <div class="main">
+      <!-- Topbar -->
+      <div class="topbar">
+        <div class="topbar-left">
+          <h1>
+            {navItems.find((n) => n.id === route)?.label ??
+              (route === "hosts" ? "Hosts" : "")}
+          </h1>
+          <div class="topbar-sub">
+            {hostsStore.activeHost?.name ?? ""}
+          </div>
+        </div>
+        <button class="search-trigger" onclick={openCmdk}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" />
+          </svg>
+          Search containers…
+          <kbd>⌘K</kbd>
+        </button>
+        <button
+          class="icon-btn"
+          onclick={toggleTheme}
+          title="Toggle theme"
+        >
+          {#if theme === "light"}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+              <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
+            </svg>
+          {:else}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+              <circle cx="12" cy="12" r="4.5" />
+              <path d="M12 2v2.5M12 19.5V22M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2 12h2.5M19.5 12H22M4.2 19.8l1.8-1.8M18 6l1.8-1.8" />
+            </svg>
+          {/if}
+        </button>
+        <button class="icon-btn" onclick={() => containersStore.refresh()} title="Refresh">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M3 12a9 9 0 1 0 2.6-6.4L3 8" />
+            <path d="M3 3v5h5" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Content Views -->
+      <div class="content">
+        {#if route === "containers"}
+          <ContainersPage />
+        {:else if route === "stacks"}
+          <StacksPage />
+        {:else if route === "events"}
+          <EventsPage />
+        {:else if route === "metrics"}
+          <MetricsPage />
+        {:else if route === "resources"}
+          <ResourcesPage />
+        {:else if route === "swarm"}
+          <SwarmPage />
+        {:else if route === "kubernetes"}
+          <KubernetesPage />
+        {:else if route === "users" && account}
+          <UsersPage me={account} />
+        {:else if route === "hosts"}
+          <HostsPage />
+        {/if}
+      </div>
+    </div>
+  </div>
 {/if}
 
 <style>

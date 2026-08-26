@@ -1,10 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, type Account, type Role } from '../lib/api';
-  import { getAppState } from '../lib/appContext';
+  import { toast } from '../lib/toast.svelte';
 
   let { me }: { me: Account } = $props();
-  const app = getAppState();
 
   let users = $state<Account[]>([]);
   let loading = $state(true);
@@ -23,7 +22,8 @@
   }
 
   async function load() {
-    loading = true; error = '';
+    loading = true;
+    error = '';
     try {
       users = await api.listUsers();
     } catch (err) {
@@ -40,11 +40,13 @@
     creating = true;
     try {
       await api.createUser(nu.trim(), np, nr);
-      nu = ''; np = ''; nr = 'viewer';
-      app.toast('User created');
+      nu = '';
+      np = '';
+      nr = 'viewer';
+      toast.success('User created');
       await load();
     } catch (err) {
-      app.toast(readError(err), 'err');
+      toast.error(readError(err));
     } finally {
       creating = false;
     }
@@ -54,10 +56,10 @@
     if (u.role === role) return;
     try {
       await api.updateUser(u.id, { role });
-      app.toast(`${u.username} is now ${role}`);
+      toast.success(`${u.username} is now ${role}`);
       await load();
     } catch (err) {
-      app.toast(readError(err), 'err');
+      toast.error(readError(err));
       await load();
     }
   }
@@ -67,9 +69,9 @@
     if (!pw) return;
     try {
       await api.updateUser(u.id, { password: pw });
-      app.toast(`Password updated for ${u.username}`);
+      toast.success(`Password updated for ${u.username}`);
     } catch (err) {
-      app.toast(readError(err), 'err');
+      toast.error(readError(err));
     }
   }
 
@@ -77,10 +79,10 @@
     if (!confirm(`Delete user "${u.username}"? This cannot be undone.`)) return;
     try {
       await api.deleteUser(u.id);
-      app.toast(`User "${u.username}" removed`, 'warn');
+      toast.info(`User "${u.username}" removed`);
       await load();
     } catch (err) {
-      app.toast(readError(err), 'err');
+      toast.error(readError(err));
     }
   }
 </script>

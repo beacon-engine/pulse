@@ -1,13 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
-  import { getAppState } from '../lib/appContext';
+  import { hostsStore } from '../stores/hosts.svelte';
+  import { toast } from '../lib/toast.svelte';
   import { navigate } from '../lib/router';
   import Pagination from '../components/Pagination.svelte';
   import AddEnvironmentModal from '../components/AddEnvironmentModal.svelte';
   import type { Environment } from '../types/environments';
 
-  const app = getAppState();
   const PER_PAGE = 20;
 
   let hosts = $state<Environment[]>([]);
@@ -19,12 +19,15 @@
   let showAdd = $state(false);
 
   async function load() {
-    loading = true; error = '';
+    loading = true;
+    error = '';
     try {
       const p = await api.listHosts({ page, perPage: PER_PAGE, search });
-      hosts = p.items; total = p.total;
+      hosts = p.items;
+      total = p.total;
     } catch (e: any) {
       error = e?.response?.data ?? String(e);
+      toast.error(error);
     } finally {
       loading = false;
     }
@@ -34,13 +37,24 @@
 
   function debounce(fn: () => void, ms = 300) {
     let t: ReturnType<typeof setTimeout>;
-    return () => { clearTimeout(t); t = setTimeout(fn, ms); };
+    return () => {
+      clearTimeout(t);
+      t = setTimeout(fn, ms);
+    };
   }
-  const onSearch = debounce(() => { page = 1; load(); });
-  function gotoPage(p: number) { page = p; load(); }
+
+  const onSearch = debounce(() => {
+    page = 1;
+    load();
+  });
+
+  function gotoPage(p: number) {
+    page = p;
+    load();
+  }
 
   async function select(host: Environment) {
-    await app.switchHost(host);
+    hostsStore.switchHost(host);
     navigate('containers');
   }
 
@@ -49,19 +63,23 @@
     if (!name || name.trim() === host.name) return;
     try {
       await api.renameHost(host.id, name.trim());
-      app.toast(`Renamed to "${name.trim()}"`);
-      await load();
-    } catch (e: any) { app.toast(e?.response?.data ?? String(e), 'err'); }
+      toast.success(`Renamed to "${name.trim()}"`);
+      await Promise.all([load(), hostsStore.loadHosts()]);
+    } catch (e: any) {
+      toast.error(e?.response?.data ?? String(e));
+    }
   }
 
   async function remove(host: Environment) {
     if (!confirm(`Remove host "${host.name}"? This only disconnects it from Pulse.`)) return;
     try {
       await api.deleteHost(host.id);
-      app.toast(`Host "${host.name}" removed`, 'warn');
+      toast.info(`Host "${host.name}" removed`);
       if (page > 1 && hosts.length === 1) page -= 1;
-      await load();
-    } catch (e: any) { app.toast(e?.response?.data ?? String(e), 'err'); }
+      await Promise.all([load(), hostsStore.loadHosts()]);
+    } catch (e: any) {
+      toast.error(e?.response?.data ?? String(e));
+    }
   }
 </script>
 
@@ -70,7 +88,9 @@
     <input class="search-box" placeholder="Search hosts…" bind:value={search} oninput={onSearch} />
     <span class="count">{total} host{total !== 1 ? 's' : ''}</span>
     <button class="btn-primary" onclick={() => (showAdd = true)}>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M12 5v14M5 12h14" />
+      </svg>
       Add host
     </button>
   </div>
@@ -83,14 +103,21 @@
     <div class="muted">{search ? 'No hosts match your search' : 'No hosts yet'}</div>
   {:else}
     <div class="table">
-      <div class="thead"><div>Host</div><div>Docker endpoint</div><div>Added</div><div class="ta-r">Actions</div></div>
+      <div class="thead">
+        <div>Host</div>
+        <div>Docker endpoint</div>
+        <div>Added</div>
+        <div class="ta-r">Actions</div>
+      </div>
       {#each hosts as h (h.id)}
-        <div class="trow" class:active={app.activeHostId === h.id}>
+        <div class="trow" class:active={hostsStore.activeHostId === h.id}>
           <div class="cell-host">
             <span class="dot" class:local={h.is_local}></span>
-            <button class="host-name" onclick={() => select(h)} title="Switch to this host">{h.name}</button>
+            <button class="host-name" onclick={() => select(h)} title="Switch to this host">
+              {h.name}
+            </button>
             {#if h.is_local}<span class="tag">local</span>{/if}
-            {#if app.activeHostId === h.id}<span class="tag active-tag">active</span>{/if}
+            {#if hostsStore.activeHostId === h.id}<span class="tag active-tag">active</span>{/if}
           </div>
           <div class="mono muted sm truncate">{h.docker_host}</div>
           <div class="muted sm">{h.created_at ? new Date(h.created_at).toLocaleDateString() : '—'}</div>
@@ -109,7 +136,10 @@
 {#if showAdd}
   <AddEnvironmentModal
     onclose={() => (showAdd = false)}
-    oncreated={async () => { showAdd = false; await load(); }}
+    oncreated={async () => {
+      showAdd = false;
+      await Promise.all([load(), hostsStore.loadHosts()]);
+    }}
   />
 {/if}
 

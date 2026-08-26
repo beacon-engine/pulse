@@ -1,24 +1,42 @@
 <script lang="ts">
-  import { getAppState } from '../lib/appContext';
+  import { onMount } from "svelte";
+  import { eventsStore } from "../stores/event.svelte";
 
-  const app = getAppState();
+  onMount(() => {
+    eventsStore.startPolling(10000);
+    return () => eventsStore.stopPolling();
+  });
 </script>
 
-{#if app.events.length === 0}
+{#if eventsStore.loading && eventsStore.events.length === 0}
+  <div class="state-msg">Loading events…</div>
+{:else if eventsStore.events.length === 0}
   <div class="empty-state">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+    </svg>
     <p>No events recorded yet</p>
   </div>
 {:else}
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Time</th><th>Container</th><th>Event</th></tr></thead>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Container</th>
+          <th>Event</th>
+        </tr>
+      </thead>
       <tbody>
-        {#each app.events as ev (ev.id)}
+        {#each eventsStore.events as ev (ev.id)}
           <tr>
             <td class="cell-mono cell-mist">{new Date(ev.occurred_at).toLocaleString()}</td>
             <td class="cell-mono">{ev.container_name}</td>
-            <td><span class="pill pill-{ev.event === 'start' ? 'green' : ev.event === 'stop' ? 'red' : 'violet'}">{ev.event}</span></td>
+            <td>
+              <span class="pill pill-{ev.event === 'start' ? 'green' : ev.event === 'stop' ? 'red' : 'violet'}">
+                {ev.event}
+              </span>
+            </td>
           </tr>
         {/each}
       </tbody>
