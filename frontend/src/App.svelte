@@ -6,6 +6,7 @@
   import AddEnvironmentModal from "./components/AddEnvironmentModal.svelte";
   import AuthScreen from "./components/AuthScreen.svelte";
   import TopLoader from "./components/TopLoader.svelte";
+  import ToastContainer from "./components/ToastContainer.svelte";
 
   import UsersPage from "./pages/UsersPage.svelte";
   import HostsPage from "./pages/HostsPage.svelte";
@@ -241,6 +242,7 @@
 </script>
 
 <TopLoader />
+<ToastContainer />
 
 {#if !authReady}
   <div class="app-boot">Loading…</div>

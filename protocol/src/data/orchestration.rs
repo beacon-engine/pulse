@@ -63,3 +63,11 @@ pub struct NamespaceInfo {
     pub name: String,
     pub status: String,
 }
+
+// ── Swarm Tasks ────────────────────────────────────────────────────────────────────
+#[derive(Deserialize, Default)]
+pub struct ScaleQuery {
+    // pub pull: Option<bool>,
+    pub target_replicas: Option<u64>,
+    pub token: Option<String>,
+}
