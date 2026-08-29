@@ -178,6 +178,14 @@ async fn main() {
             "/api/hosts/:host_id/swarm/nodes",
             get(api::docker::list_nodes),
         )
+        .route(
+            "/api/hosts/:host_id/swarm/services/:service_id/update",
+            post(api::docker::update_swarm_service),
+        )
+        .route(
+            "/api/hosts/:host_id/swarm/services/:service_id/scale",
+            post(api::docker::scale_swarm_service),
+        )
         // Webhook execution endpoints
         .route(
             "/api/webhooks/:host_id/:container_id/recreate",

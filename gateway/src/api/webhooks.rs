@@ -13,7 +13,7 @@ use crate::agent::unexpected;
 use crate::api::resolve_docker_host;
 use crate::state::AppState;
 
-use protocol::data::container::ContainerInfo;
+use protocol::data::{container::ContainerInfo, orchestration::ScaleQuery};
 use protocol::wire::{ComposeStack, Request, Response};
 
 pub use protocol::protocol::response::TokenResponse;
@@ -23,13 +23,6 @@ type ApiError = (StatusCode, String);
 #[derive(Deserialize, Default)]
 pub struct PullQuery {
     pub pull: Option<bool>,
-    pub token: Option<String>,
-}
-
-#[derive(Deserialize, Default)]
-pub struct ScaleQuery {
-    // pub pull: Option<bool>,
-    pub target_replicas: Option<u64>,
     pub token: Option<String>,
 }
 

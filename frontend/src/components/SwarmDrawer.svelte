@@ -29,6 +29,18 @@
   let isRefreshing = $state(false);
   let actionBusy = $state(false);
 
+  // ── Scale Staged State ───────────────────────────────────────────────────
+  let targetReplicas = $state<number>(swarm.replicas);
+  let currentReplicas = $derived(detail?.replicas ?? swarm.replicas);
+  let isDirty = $derived(targetReplicas !== currentReplicas);
+
+  // Keep target in sync if the service updates from external refreshes while not dirty
+  $effect(() => {
+    if (!isDirty && detail) {
+      targetReplicas = detail.replicas;
+    }
+  });
+
   // ── Logs State ────────────────────────────────────────────────────────────
   let logs = $state("");
   let logsLoading = $state(false);
@@ -58,32 +70,24 @@
       return;
     }
 
-    // Default container selection behavior
-    containersStore.selectedContainer = {
+    containersStore.selectContainer({
       id: task.container_id,
       name: `${svc.name}.${task.slot}`,
       image: task.image,
       status: task.state,
       state: task.state,
       stack: svc.name,
-    };
+    });
   }
 
   async function loadLogs() {
-    // logsLoading = true;
-    // try {
-    //   logs = await api.webhookScaleSwarm(hostId, swarm.id, logsTail);
-    // } catch (e: any) {
-    //   logs = `[Error loading logs: ${e?.response?.data ?? String(e)}]`;
-    // } finally {
-    //   logsLoading = false;
-    // }
+    // logs endpoint placeholder
   }
 
   async function triggerForceUpdate() {
     actionBusy = true;
     try {
-      await api.webhookUpdateSwarm(hostId, swarm.id);
+      await api.updateSwarm(hostId, swarm.id);
       toast.success("Service restart triggered");
       onrefresh();
       await loadData();
@@ -93,6 +97,35 @@
     } finally {
       actionBusy = false;
     }
+  }
+
+  async function commitScale() {
+    if (targetReplicas < 0 || !isDirty) return;
+    actionBusy = true;
+    const count = targetReplicas;
+    try {
+      await api.scaleSwarm(hostId, swarm.id, count);
+      toast.success(`Service scaled to ${count} replica${count !== 1 ? "s" : ""}`);
+      if (detail) {
+        detail = {
+          ...detail,
+          replicas: count,
+          running: count,
+        }
+      }
+      onrefresh();
+      await loadData();
+    } catch (e: any) {
+      const err = e?.response?.data ?? String(e);
+      toast.error(`Scale failed: ${err}`);
+      targetReplicas = currentReplicas;
+    } finally {
+      actionBusy = false;
+    }
+  }
+
+  function resetScale() {
+    targetReplicas = currentReplicas;
   }
 
   $effect(() => {
@@ -115,7 +148,6 @@
 <div class="backdrop" onclick={onclose}></div>
 
 <div class="drawer">
-  <!-- Top loading indicator for silent refreshes -->
   {#if isRefreshing}
     <div class="top-loader"></div>
   {/if}
@@ -134,6 +166,7 @@
         <div class="dh-id">{swarm.id.slice(0, 12)}</div>
       </div>
     </div>
+
     <div class="dh-actions">
       <button
         class="hbtn"
@@ -147,6 +180,7 @@
         </svg>
         {actionBusy ? "Restarting…" : "Force Restart"}
       </button>
+
       <button class="close-x" onclick={onclose} aria-label="Close">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M6 6l12 12M18 6 6 18" />
@@ -177,6 +211,68 @@
       <div class="state-msg">Loading service details…</div>
     {:else if tab === "overview"}
       {@const current = detail ?? swarm}
+
+      <!-- Scaling Banner / Panel -->
+      <div class="scale-panel">
+        <div class="scale-panel-info">
+          <div class="scale-title">Replicas & Scaling</div>
+          <div class="scale-sub">
+            Currently <strong>{current.running}</strong> running of <strong>{currentReplicas}</strong> configured. Set your target replica count and confirm.
+          </div>
+        </div>
+
+        <form class="scale-form" onsubmit={(e) => { e.preventDefault(); commitScale(); }}>
+          <div class="stepper-box">
+            <button
+              type="button"
+              class="step-btn"
+              disabled={actionBusy || targetReplicas <= 0}
+              onclick={() => targetReplicas = Math.max(0, targetReplicas - 1)}
+              aria-label="Decrease"
+            >
+              −
+            </button>
+            <input
+              type="number"
+              min="0"
+              max="256"
+              class="step-input"
+              bind:value={targetReplicas}
+              disabled={actionBusy}
+            />
+            <button
+              type="button"
+              class="step-btn"
+              disabled={actionBusy}
+              onclick={() => targetReplicas += 1}
+              aria-label="Increase"
+            >
+              +
+            </button>
+          </div>
+
+          {#if isDirty}
+            <div class="scale-actions">
+              <button
+                type="submit"
+                class="btn-primary-scale"
+                disabled={actionBusy}
+              >
+                {actionBusy ? "Scaling…" : `Scale to ${targetReplicas}`}
+              </button>
+              <button
+                type="button"
+                class="btn-cancel"
+                disabled={actionBusy}
+                onclick={resetScale}
+              >
+                Reset
+              </button>
+            </div>
+          {/if}
+        </form>
+      </div>
+
       <div class="kv-list">
         <div class="kv-row">
           <span class="k">Service ID</span>
@@ -187,7 +283,7 @@
           <span class="v mono">{current.image}</span>
         </div>
         <div class="kv-row">
-          <span class="k">Replicas</span>
+          <span class="k">Status</span>
           <span class="v">
             <span
               class="pill {current.running === current.replicas
@@ -485,6 +581,135 @@
     font-size: 13.5px;
     padding: 30px 0;
     text-align: center;
+  }
+
+  /* Scaling Panel */
+  .scale-panel {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 16px;
+    margin-bottom: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .scale-panel-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .scale-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--ink);
+  }
+  .scale-sub {
+    font-size: 12.5px;
+    color: var(--mist);
+    line-height: 1.4;
+  }
+  .scale-sub strong {
+    color: var(--ink);
+  }
+
+  .scale-form {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .stepper-box {
+    display: inline-flex;
+    align-items: center;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+  .step-btn {
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    color: var(--ink);
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .step-btn:hover:not(:disabled) {
+    background: var(--surface-2);
+  }
+  .step-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  .step-input {
+    width: 50px;
+    height: 34px;
+    border: none;
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    background: transparent;
+    text-align: center;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--ink);
+    padding: 0;
+    -moz-appearance: textfield;
+  }
+  .step-input::-webkit-outer-spin-button,
+  .step-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  .step-input:focus {
+    outline: none;
+    background: var(--surface-2);
+  }
+
+  .scale-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .btn-primary-scale {
+    padding: 8px 16px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-size: 12.5px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity 0.12s;
+  }
+  .btn-primary-scale:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+  .btn-primary-scale:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .btn-cancel {
+    padding: 8px 12px;
+    background: transparent;
+    color: var(--mist);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .btn-cancel:hover:not(:disabled) {
+    background: var(--surface);
+    color: var(--ink);
   }
 
   .kv-list {

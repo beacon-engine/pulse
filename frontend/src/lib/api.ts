@@ -562,29 +562,26 @@ export class PulseClient {
     return data;
   }
 
-  async webhookUpdateSwarm(
+  async updateSwarm(
     hostId: string,
     serviceId: string,
-    token?: string,
   ): Promise<{ service: string; updated: boolean }> {
     const { data } = await this.http.post(
-      `/webhooks/${hostId}/swarm/${serviceId}/update`,
-      null,
-      { params: { token } },
+      `/hosts/${hostId}/swarm/services/${serviceId}/update`,
+      null
     );
     return data;
   }
 
-  async webhookScaleSwarm(
+  async scaleSwarm(
     hostId: string,
     serviceId: string,
     count: number,
-    token?: string,
   ): Promise<{ service: string; updated: boolean }> {
     const { data } = await this.http.post(
-      `/webhooks/${hostId}/swarm/${serviceId}/scale`,
+      `/hosts/${hostId}/swarm/services/${serviceId}/scale`,
       null,
-      { params: { target_replicas: count, token } },
+      { params: { target_replicas: count } },
     );
     return data;
   }

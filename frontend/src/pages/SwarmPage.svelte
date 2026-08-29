@@ -31,7 +31,7 @@
   }
 
   function viewService(svc: SwarmService) {
-    swarmStore.selectedService = svc;
+    swarmStore.selectService(svc);
   }
 
   async function loadTokens() {
@@ -49,23 +49,6 @@
       })
     );
     serviceTokens = Object.fromEntries(entries);
-  }
-
-  async function forceUpdate(serviceId: string) {
-    const hostId = hostsStore.activeHostId;
-    if (!hostId) return;
-
-    updatingService = serviceId;
-    try {
-      const token = serviceTokens[serviceId] ?? undefined;
-      await api.webhookUpdateSwarm(hostId, serviceId, token);
-      toast.success("Service update triggered");
-      await swarmStore.refresh();
-    } catch (e: any) {
-      toast.error(e?.response?.data ?? String(e));
-    } finally {
-      updatingService = "";
-    }
   }
 
   async function enableServiceWebhook(serviceId: string) {
@@ -180,7 +163,6 @@
           <th>Replicas</th>
           <th>State</th>
           <th>Webhook</th>
-          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -230,26 +212,6 @@
               {:else}
                 <button class="enable-wh-btn" onclick={() => enableServiceWebhook(svc.id)}>Enable</button>
               {/if}
-            </td>
-            <td>
-              <button
-                class="update-btn"
-                onclick={() => forceUpdate(svc.id)}
-                disabled={updatingService === svc.id}
-              >
-                {#if updatingService === svc.id}
-                  <svg class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M3 12a9 9 0 1 0 2.6-6.4L3 8" />
-                    <path d="M3 3v5h5" />
-                  </svg>
-                {:else}
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M3 12a9 9 0 1 0 2.6-6.4L3 8" />
-                    <path d="M3 3v5h5" />
-                  </svg>
-                {/if}
-                Force update
-              </button>
             </td>
           </tr>
         {/each}

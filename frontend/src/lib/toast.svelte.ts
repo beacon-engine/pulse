@@ -31,6 +31,10 @@ class ToastStore {
   remove(id: string) {
     this.toasts = this.toasts.filter((t) => t.id !== id);
   }
+
+  clear() {
+    this.toasts = [];
+  }
 }
 
 export const toast = new ToastStore();
