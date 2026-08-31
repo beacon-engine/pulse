@@ -29,7 +29,10 @@ pub struct PageQuery {
 impl PageQuery {
     /// Normalised (page, per_page) with sane bounds.
     pub fn bounds(&self) -> (u32, u32) {
-        (self.page.unwrap_or(1).max(1), self.per_page.unwrap_or(50).clamp(1, 500))
+        (
+            self.page.unwrap_or(1).max(1),
+            self.per_page.unwrap_or(50).clamp(1, 500),
+        )
     }
 
     /// Trimmed, lower-cased search term (None when empty).
@@ -54,8 +57,17 @@ pub struct Page<T> {
 pub fn paginate<T>(items: Vec<T>, page: u32, per_page: u32) -> Page<T> {
     let total = items.len();
     let start = ((page - 1) as usize).saturating_mul(per_page as usize);
-    let items = items.into_iter().skip(start).take(per_page as usize).collect();
-    Page { items, total, page, per_page }
+    let items = items
+        .into_iter()
+        .skip(start)
+        .take(per_page as usize)
+        .collect();
+    Page {
+        items,
+        total,
+        page,
+        per_page,
+    }
 }
 
 /// Resolves a host id to the `docker_host` connection string the agent needs.

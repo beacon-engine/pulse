@@ -841,11 +841,6 @@
         font-size: 12.5px;
         margin-top: 1px;
     }
-    .topbar-err {
-        color: var(--red);
-        font-size: 11.5px;
-        margin-left: 8px;
-    }
 
     .search-trigger {
         display: flex;
@@ -1009,68 +1004,5 @@
         text-align: center;
         color: var(--mist-2);
         font-size: 13px;
-    }
-
-    /* ── Toasts ──────────────────────────────────────────────────────────── */
-    .toast-stack {
-        position: fixed;
-        bottom: 22px;
-        right: 22px;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        z-index: 300;
-    }
-    .toast {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        background: var(--surface);
-        border: 1px solid var(--border);
-        box-shadow: var(--shadow-md);
-        border-radius: 11px;
-        padding: 11px 15px;
-        font-size: 13px;
-        font-weight: 600;
-        min-width: 240px;
-        animation: toastin 0.25s ease;
-    }
-    @keyframes toastin {
-        from {
-            opacity: 0;
-            transform: translateY(8px);
-        }
-        to {
-            opacity: 1;
-            transform: none;
-        }
-    }
-    .toast-ic {
-        width: 22px;
-        height: 22px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex-shrink: 0;
-    }
-    .toast-ic :global(svg) {
-        width: 12px;
-        height: 12px;
-    }
-    .toast-ok .toast-ic {
-        background: var(--green);
-    }
-    .toast-warn .toast-ic {
-        background: var(--amber);
-    }
-    .toast-err .toast-ic {
-        background: var(--red);
-    }
-    .text-sm {
-        font-size: 1.2rem;
-    }
-    .text-right {
-        text-align: right;
     }
 </style>

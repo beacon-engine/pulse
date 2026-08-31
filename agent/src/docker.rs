@@ -26,11 +26,20 @@ pub async fn list(docker: &Docker) -> Result<Vec<ContainerInfo>, bollard::errors
     let mut filters: HashMap<String, Vec<String>> = HashMap::new();
     filters.insert(
         "status".to_string(),
-        vec!["running".to_string(), "exited".to_string(), "paused".to_string(), "created".to_string()],
+        vec![
+            "running".to_string(),
+            "exited".to_string(),
+            "paused".to_string(),
+            "created".to_string(),
+        ],
     );
 
     let containers = docker
-        .list_containers(Some(ListContainersOptions { all: true, filters: Some(filters), ..Default::default() }))
+        .list_containers(Some(ListContainersOptions {
+            all: true,
+            filters: Some(filters),
+            ..Default::default()
+        }))
         .await?;
 
     let mut result: Vec<ContainerInfo> = containers
@@ -67,7 +76,9 @@ pub async fn list(docker: &Docker) -> Result<Vec<ContainerInfo>, bollard::errors
 // ── Inspect ───────────────────────────────────────────────────────────────────
 
 pub async fn inspect(docker: &Docker, id: &str) -> Result<ContainerDetail, bollard::errors::Error> {
-    let info = docker.inspect_container(id, None::<InspectContainerOptions>).await?;
+    let info = docker
+        .inspect_container(id, None::<InspectContainerOptions>)
+        .await?;
 
     let config = info.config.unwrap_or_default();
     let state = info.state.unwrap_or_default();
@@ -119,10 +130,18 @@ pub async fn inspect(docker: &Docker, id: &str) -> Result<ContainerDetail, bolla
 
     Ok(ContainerDetail {
         id: info.id.unwrap_or_default(),
-        name: info.name.unwrap_or_default().trim_start_matches('/').to_string(),
+        name: info
+            .name
+            .unwrap_or_default()
+            .trim_start_matches('/')
+            .to_string(),
         image: config.image.unwrap_or_default(),
         created: info.created.unwrap_or_default(),
-        state: state.status.as_ref().map(|s| s.to_string()).unwrap_or_default(),
+        state: state
+            .status
+            .as_ref()
+            .map(|s| s.to_string())
+            .unwrap_or_default(),
         started_at: state.started_at.unwrap_or_default(),
         finished_at: state.finished_at.unwrap_or_default(),
         restart_count: info.restart_count.unwrap_or(0),
@@ -139,7 +158,9 @@ pub async fn inspect_raw(
     docker: &Docker,
     id: &str,
 ) -> Result<serde_json::Value, bollard::errors::Error> {
-    let info = docker.inspect_container(id, None::<InspectContainerOptions>).await?;
+    let info = docker
+        .inspect_container(id, None::<InspectContainerOptions>)
+        .await?;
     Ok(serde_json::to_value(info).unwrap_or_default())
 }
 
@@ -150,8 +171,14 @@ pub async fn recreate(
     id: &str,
     new_ports: &[PortMap],
 ) -> Result<String, bollard::errors::Error> {
-    let info = docker.inspect_container(id, None::<InspectContainerOptions>).await?;
-    let name = info.name.unwrap_or_default().trim_start_matches('/').to_string();
+    let info = docker
+        .inspect_container(id, None::<InspectContainerOptions>)
+        .await?;
+    let name = info
+        .name
+        .unwrap_or_default()
+        .trim_start_matches('/')
+        .to_string();
     let config = info.config.unwrap_or_default();
     let mut host_config = info.host_config.unwrap_or_default();
 
@@ -170,15 +197,32 @@ pub async fn recreate(
     host_config.port_bindings = Some(bindings);
 
     // Stop and remove old container (best effort stop)
-    let _ = docker.stop_container(id, Some(StopContainerOptions { t: Some(5), ..Default::default() })).await;
+    let _ = docker
+        .stop_container(
+            id,
+            Some(StopContainerOptions {
+                t: Some(5),
+                ..Default::default()
+            }),
+        )
+        .await;
     docker
-        .remove_container(id, Some(RemoveContainerOptions { force: true, ..Default::default() }))
+        .remove_container(
+            id,
+            Some(RemoveContainerOptions {
+                force: true,
+                ..Default::default()
+            }),
+        )
         .await?;
 
     // Create with same name and updated ports
     let created = docker
         .create_container(
-            Some(CreateContainerOptions { name: Some(name.clone()), ..Default::default() }),
+            Some(CreateContainerOptions {
+                name: Some(name.clone()),
+                ..Default::default()
+            }),
             ContainerCreateBody {
                 image: config.image.clone(),
                 cmd: config.cmd.clone(),
@@ -190,7 +234,9 @@ pub async fn recreate(
         )
         .await?;
 
-    docker.start_container(&created.id, None::<StartContainerOptions>).await?;
+    docker
+        .start_container(&created.id, None::<StartContainerOptions>)
+        .await?;
     Ok(created.id)
 }
 
@@ -201,15 +247,35 @@ pub async fn recreate_latest(
     id: &str,
     pull: bool,
 ) -> Result<String, bollard::errors::Error> {
-    let info = docker.inspect_container(id, None::<InspectContainerOptions>).await?;
-    let name = info.name.unwrap_or_default().trim_start_matches('/').to_string();
+    let info = docker
+        .inspect_container(id, None::<InspectContainerOptions>)
+        .await?;
+    let name = info
+        .name
+        .unwrap_or_default()
+        .trim_start_matches('/')
+        .to_string();
     let config = info.config.unwrap_or_default();
     let host_config = info.host_config.unwrap_or_default();
     let image = config.image.clone().unwrap_or_default();
 
-    let _ = docker.stop_container(id, Some(StopContainerOptions { t: Some(5), ..Default::default() })).await;
+    let _ = docker
+        .stop_container(
+            id,
+            Some(StopContainerOptions {
+                t: Some(5),
+                ..Default::default()
+            }),
+        )
+        .await;
     docker
-        .remove_container(id, Some(RemoveContainerOptions { force: true, ..Default::default() }))
+        .remove_container(
+            id,
+            Some(RemoveContainerOptions {
+                force: true,
+                ..Default::default()
+            }),
+        )
         .await?;
 
     if pull && !image.is_empty() {
@@ -230,7 +296,10 @@ pub async fn recreate_latest(
 
     let created = docker
         .create_container(
-            Some(CreateContainerOptions { name: Some(name.clone()), ..Default::default() }),
+            Some(CreateContainerOptions {
+                name: Some(name.clone()),
+                ..Default::default()
+            }),
             ContainerCreateBody {
                 image: Some(image),
                 cmd: config.cmd.clone(),
@@ -242,7 +311,9 @@ pub async fn recreate_latest(
         )
         .await?;
 
-    docker.start_container(&created.id, None::<StartContainerOptions>).await?;
+    docker
+        .start_container(&created.id, None::<StartContainerOptions>)
+        .await?;
     Ok(created.id)
 }
 
@@ -253,19 +324,42 @@ pub async fn update_env(
     id: &str,
     env: &[String],
 ) -> Result<String, bollard::errors::Error> {
-    let info = docker.inspect_container(id, None::<InspectContainerOptions>).await?;
-    let name = info.name.unwrap_or_default().trim_start_matches('/').to_string();
+    let info = docker
+        .inspect_container(id, None::<InspectContainerOptions>)
+        .await?;
+    let name = info
+        .name
+        .unwrap_or_default()
+        .trim_start_matches('/')
+        .to_string();
     let config = info.config.unwrap_or_default();
     let host_config = info.host_config.unwrap_or_default();
 
-    let _ = docker.stop_container(id, Some(StopContainerOptions { t: Some(5), ..Default::default() })).await;
+    let _ = docker
+        .stop_container(
+            id,
+            Some(StopContainerOptions {
+                t: Some(5),
+                ..Default::default()
+            }),
+        )
+        .await;
     docker
-        .remove_container(id, Some(RemoveContainerOptions { force: true, ..Default::default() }))
+        .remove_container(
+            id,
+            Some(RemoveContainerOptions {
+                force: true,
+                ..Default::default()
+            }),
+        )
         .await?;
 
     let created = docker
         .create_container(
-            Some(CreateContainerOptions { name: Some(name.clone()), ..Default::default() }),
+            Some(CreateContainerOptions {
+                name: Some(name.clone()),
+                ..Default::default()
+            }),
             ContainerCreateBody {
                 image: config.image.clone(),
                 cmd: config.cmd.clone(),
@@ -277,7 +371,9 @@ pub async fn update_env(
         )
         .await?;
 
-    docker.start_container(&created.id, None::<StartContainerOptions>).await?;
+    docker
+        .start_container(&created.id, None::<StartContainerOptions>)
+        .await?;
     Ok(created.id)
 }
 
@@ -359,11 +455,15 @@ pub async fn list_images(docker: &Docker) -> Result<Vec<ImageInfo>, bollard::err
     Ok(images
         .into_iter()
         .map(|img| {
-            let dangling = img.repo_tags.is_empty()
-                || img.repo_tags.iter().all(|t| t == "<none>:<none>");
+            let dangling =
+                img.repo_tags.is_empty() || img.repo_tags.iter().all(|t| t == "<none>:<none>");
             ImageInfo {
                 id: img.id,
-                tags: img.repo_tags.into_iter().filter(|t| t != "<none>:<none>").collect(),
+                tags: img
+                    .repo_tags
+                    .into_iter()
+                    .filter(|t| t != "<none>:<none>")
+                    .collect(),
                 size: img.size,
                 created: img.created,
                 dangling,
@@ -375,7 +475,11 @@ pub async fn list_images(docker: &Docker) -> Result<Vec<ImageInfo>, bollard::err
 pub async fn delete_image(docker: &Docker, id: &str) -> Result<(), bollard::errors::Error> {
     use bollard::query_parameters::RemoveImageOptionsBuilder;
     docker
-        .remove_image(id, Some(RemoveImageOptionsBuilder::new().force(true).build()), None)
+        .remove_image(
+            id,
+            Some(RemoveImageOptionsBuilder::new().force(true).build()),
+            None,
+        )
         .await?;
     Ok(())
 }
@@ -409,7 +513,10 @@ pub async fn list_volumes(docker: &Docker) -> Result<Vec<VolumeInfo>, bollard::e
 pub async fn delete_volume(docker: &Docker, name: &str) -> Result<(), bollard::errors::Error> {
     use bollard::query_parameters::RemoveVolumeOptionsBuilder;
     docker
-        .remove_volume(name, Some(RemoveVolumeOptionsBuilder::new().force(true).build()))
+        .remove_volume(
+            name,
+            Some(RemoveVolumeOptionsBuilder::new().force(true).build()),
+        )
         .await
 }
 
@@ -422,8 +529,12 @@ pub async fn prune_volumes(docker: &Docker) -> Result<i64, bollard::errors::Erro
 
 // ── Networks ──────────────────────────────────────────────────────────────────
 
-pub async fn list_host_networks(docker: &Docker) -> Result<Vec<HostNetwork>, bollard::errors::Error> {
-    let nets = docker.list_networks(None::<bollard::query_parameters::ListNetworksOptions>).await?;
+pub async fn list_host_networks(
+    docker: &Docker,
+) -> Result<Vec<HostNetwork>, bollard::errors::Error> {
+    let nets = docker
+        .list_networks(None::<bollard::query_parameters::ListNetworksOptions>)
+        .await?;
     let mut result: Vec<HostNetwork> = nets
         .into_iter()
         .map(|n| HostNetwork {
@@ -442,7 +553,9 @@ pub async fn get_container_networks(
     docker: &Docker,
     container_id: &str,
 ) -> Result<Vec<ContainerNetworkInfo>, bollard::errors::Error> {
-    let info = docker.inspect_container(container_id, None::<InspectContainerOptions>).await?;
+    let info = docker
+        .inspect_container(container_id, None::<InspectContainerOptions>)
+        .await?;
     let map = info
         .network_settings
         .and_then(|ns| ns.networks)
@@ -513,8 +626,7 @@ pub async fn exec_command(
         .await?;
 
     let mut out = String::new();
-    if let StartExecResults::Attached { mut output, .. } =
-        docker.start_exec(&exec.id, None).await?
+    if let StartExecResults::Attached { mut output, .. } = docker.start_exec(&exec.id, None).await?
     {
         while let Some(Ok(msg)) = output.next().await {
             match msg {
@@ -538,9 +650,18 @@ pub fn hardware_metrics() -> HardwareMetrics {
 
     let mem_total = sys.total_memory();
     let mem_used = sys.used_memory();
-    let mem_pct = if mem_total > 0 { mem_used as f32 / mem_total as f32 * 100.0 } else { 0.0 };
+    let mem_pct = if mem_total > 0 {
+        mem_used as f32 / mem_total as f32 * 100.0
+    } else {
+        0.0
+    };
 
-    HardwareMetrics { mem_used, mem_total, mem_pct, disks: disk_metrics() }
+    HardwareMetrics {
+        mem_used,
+        mem_total,
+        mem_pct,
+        disks: disk_metrics(),
+    }
 }
 
 /// Chooses the disk collector honestly:
@@ -585,16 +706,38 @@ fn host_disk_metrics(root: &str) -> Vec<DiskInfo> {
 
     // Pseudo/virtual filesystems we never want to report.
     const SKIP_FS: &[&str] = &[
-        "proc", "sysfs", "tmpfs", "devtmpfs", "devpts", "cgroup", "cgroup2", "overlay",
-        "squashfs", "mqueue", "fusectl", "debugfs", "tracefs", "bpf", "configfs", "pstore",
-        "securityfs", "ramfs", "autofs", "binfmt_misc", "nsfs", "hugetlbfs", "fuse.lxcfs",
+        "proc",
+        "sysfs",
+        "tmpfs",
+        "devtmpfs",
+        "devpts",
+        "cgroup",
+        "cgroup2",
+        "overlay",
+        "squashfs",
+        "mqueue",
+        "fusectl",
+        "debugfs",
+        "tracefs",
+        "bpf",
+        "configfs",
+        "pstore",
+        "securityfs",
+        "ramfs",
+        "autofs",
+        "binfmt_misc",
+        "nsfs",
+        "hugetlbfs",
+        "fuse.lxcfs",
     ];
 
     // The host mount table. Prefer PID 1's table (the host mount namespace);
     // fall back to the generic file, then to the local collector.
     let mounts = std::fs::read_to_string(format!("{root}/proc/1/mounts"))
         .or_else(|_| std::fs::read_to_string(format!("{root}/proc/mounts")));
-    let Ok(mounts) = mounts else { return local_disk_metrics() };
+    let Ok(mounts) = mounts else {
+        return local_disk_metrics();
+    };
 
     // Deduplicate by (total, available) — bind mounts report identical stats.
     let mut best: HashMap<(u64, u64), (i32, DiskInfo)> = HashMap::new();
@@ -619,15 +762,31 @@ fn host_disk_metrics(root: &str) -> Vec<DiskInfo> {
         }
 
         // The host path as seen from inside the container: HOST_ROOT + mount.
-        let path = if mount == "/" { root.to_string() } else { format!("{root}{mount}") };
-        let Some((total, available)) = statvfs_bytes(&path) else { continue };
+        let path = if mount == "/" {
+            root.to_string()
+        } else {
+            format!("{root}{mount}")
+        };
+        let Some((total, available)) = statvfs_bytes(&path) else {
+            continue;
+        };
         if total < 1_000_000_000 {
             continue; // skip < 1 GB
         }
 
         let used = total.saturating_sub(available);
-        let pct = if total > 0 { used as f32 / total as f32 * 100.0 } else { 0.0 };
-        let info = DiskInfo { name: device.to_string(), mount: mount.clone(), total, used, pct };
+        let pct = if total > 0 {
+            used as f32 / total as f32 * 100.0
+        } else {
+            0.0
+        };
+        let info = DiskInfo {
+            name: device.to_string(),
+            mount: mount.clone(),
+            total,
+            used,
+            pct,
+        };
 
         let priority: i32 = if mount == "/" { 100 } else { 10 };
         let key = (total, available);
@@ -660,8 +819,8 @@ fn statvfs_bytes(path: &str) -> Option<(u64, u64)> {
 }
 
 fn local_disk_metrics() -> Vec<DiskInfo> {
-    use sysinfo::Disks;
     use std::collections::HashMap;
+    use sysinfo::Disks;
 
     let list = Disks::new_with_refreshed_list();
 
@@ -673,28 +832,50 @@ fn local_disk_metrics() -> Vec<DiskInfo> {
     for d in list.iter() {
         let total = d.total_space();
         // Skip tiny/virtual volumes (< 1 GB)
-        if total < 1_000_000_000 { continue; }
+        if total < 1_000_000_000 {
+            continue;
+        }
 
         let mount = d.mount_point().to_string_lossy().to_string();
 
         // Skip noisy/internal macOS paths
-        if mount.contains("AppTranslocation") { continue; }
-        if mount.contains("CoreSimulator") { continue; }
-        if mount.starts_with("/private/var/") { continue; }
-        if mount.starts_with("/System/Volumes/") { continue; }
+        if mount.contains("AppTranslocation") {
+            continue;
+        }
+        if mount.contains("CoreSimulator") {
+            continue;
+        }
+        if mount.starts_with("/private/var/") {
+            continue;
+        }
+        if mount.starts_with("/System/Volumes/") {
+            continue;
+        }
 
-        let priority: i32 = if mount == "/" { 100 }
-            else if mount.starts_with("/Volumes/") { 50 } // external drives
-            else { 10 };
+        let priority: i32 = if mount == "/" {
+            100
+        } else if mount.starts_with("/Volumes/") {
+            50
+        }
+        // external drives
+        else {
+            10
+        };
 
         let available = d.available_space();
         let used = total.saturating_sub(available);
-        let pct = if total > 0 { used as f32 / total as f32 * 100.0 } else { 0.0 };
+        let pct = if total > 0 {
+            used as f32 / total as f32 * 100.0
+        } else {
+            0.0
+        };
 
         let info = DiskInfo {
             name: d.name().to_string_lossy().to_string(),
             mount: mount.clone(),
-            total, used, pct,
+            total,
+            used,
+            pct,
         };
 
         let key = (total, available);
@@ -712,13 +893,31 @@ fn local_disk_metrics() -> Vec<DiskInfo> {
 // ── Basic actions ─────────────────────────────────────────────────────────────
 
 pub async fn start(docker: &Docker, id: &str) -> Result<(), bollard::errors::Error> {
-    docker.start_container(id, None::<StartContainerOptions>).await
+    docker
+        .start_container(id, None::<StartContainerOptions>)
+        .await
 }
 
 pub async fn stop(docker: &Docker, id: &str) -> Result<(), bollard::errors::Error> {
-    docker.stop_container(id, Some(StopContainerOptions { t: Some(10), ..Default::default() })).await
+    docker
+        .stop_container(
+            id,
+            Some(StopContainerOptions {
+                t: Some(10),
+                ..Default::default()
+            }),
+        )
+        .await
 }
 
 pub async fn restart(docker: &Docker, id: &str) -> Result<(), bollard::errors::Error> {
-    docker.restart_container(id, Some(RestartContainerOptions { t: Some(10), ..Default::default() })).await
+    docker
+        .restart_container(
+            id,
+            Some(RestartContainerOptions {
+                t: Some(10),
+                ..Default::default()
+            }),
+        )
+        .await
 }

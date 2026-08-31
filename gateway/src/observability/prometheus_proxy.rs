@@ -1,4 +1,4 @@
-use axum::{extract::Query, http::StatusCode, Json};
+use axum::{Json, extract::Query, http::StatusCode};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -27,14 +27,18 @@ pub async fn query(
         .map_err(|e| {
             (
                 StatusCode::BAD_GATEWAY,
-                Json(ProxyError { error: format!("Cannot reach Prometheus: {e}") }),
+                Json(ProxyError {
+                    error: format!("Cannot reach Prometheus: {e}"),
+                }),
             )
         })?;
 
     let body: serde_json::Value = resp.json().await.map_err(|e| {
         (
             StatusCode::BAD_GATEWAY,
-            Json(ProxyError { error: format!("Invalid Prometheus response: {e}") }),
+            Json(ProxyError {
+                error: format!("Invalid Prometheus response: {e}"),
+            }),
         )
     })?;
 

@@ -1,9 +1,9 @@
 //! Cluster-wide Kubernetes reads, forwarded to the agent's kube client.
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 
 use crate::agent::unexpected;
@@ -34,7 +34,11 @@ pub async fn delete_pod(
     State(state): State<AppState>,
     Path((namespace, name)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    match state.agent.call(Request::K8sDeletePod { namespace, name }).await {
+    match state
+        .agent
+        .call(Request::K8sDeletePod { namespace, name })
+        .await
+    {
         Response::Ok => Ok(StatusCode::NO_CONTENT),
         other => Err(unexpected(other)),
     }

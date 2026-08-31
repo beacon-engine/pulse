@@ -1,15 +1,15 @@
 //! Authentication primitives: password hashing, session tokens, the session
 //! cookie, and the `require_auth` middleware that gates protected routes.
 
+use argon2::Argon2;
 use argon2::password_hash::rand_core::{OsRng, RngCore};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use argon2::Argon2;
 use axum::{
+    Extension,
     extract::{Request, State},
     http::{Method, StatusCode},
     middleware::Next,
     response::Response,
-    Extension,
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use chrono::{Duration, Utc};
@@ -128,7 +128,10 @@ pub async fn require_auth(
         .get_user(&session.user_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::UNAUTHORIZED, "user no longer exists".to_string()))?;
+        .ok_or((
+            StatusCode::UNAUTHORIZED,
+            "user no longer exists".to_string(),
+        ))?;
 
     req.extensions_mut().insert(AuthUser {
         id: user.id,

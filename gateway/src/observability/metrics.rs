@@ -2,8 +2,8 @@
 #![allow(dead_code)]
 
 use prometheus::{
-    register_counter_vec, register_gauge, register_int_gauge, CounterVec, Gauge, IntGauge,
-    TextEncoder,
+    CounterVec, Gauge, IntGauge, TextEncoder, register_counter_vec, register_gauge,
+    register_int_gauge,
 };
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -47,7 +47,11 @@ pub fn record_request(method: &str, endpoint: &str, status: &str) {
 }
 
 pub fn set_container_count(n: i64) {
-    METRICS.get().expect("metrics not initialized").containers_total.set(n);
+    METRICS
+        .get()
+        .expect("metrics not initialized")
+        .containers_total
+        .set(n);
 }
 
 static EVENTS: OnceLock<prometheus::CounterVec> = OnceLock::new();

@@ -16,7 +16,10 @@ where
     let mut filters: HashMap<String, Vec<String>> = HashMap::new();
     filters.insert("type".to_string(), vec!["container".to_string()]);
 
-    let options = EventsOptions { filters: Some(filters), ..Default::default() };
+    let options = EventsOptions {
+        filters: Some(filters),
+        ..Default::default()
+    };
     let mut stream = docker.events(Some(options));
 
     while let Some(result) = stream.next().await {
@@ -47,5 +50,10 @@ fn to_frame(event: bollard::models::EventMessage) -> Option<EventFrame> {
         .unwrap_or_else(|| container_id.clone());
     let exit_code = attrs.get("exitCode").cloned();
 
-    Some(EventFrame { container_id, container_name, action, exit_code })
+    Some(EventFrame {
+        container_id,
+        container_name,
+        action,
+        exit_code,
+    })
 }
