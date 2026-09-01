@@ -1,13 +1,13 @@
 //! First-run setup, login, logout and "who am I" endpoints.
 
-use axum::{extract::State, http::StatusCode, Extension, Json};
+use axum::{Extension, Json, extract::State, http::StatusCode};
 use axum_extra::extract::CookieJar;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::auth::{
-    clear_cookie, generate_token, hash_password, session_cookie, session_expiry, verify_password,
-    AuthUser, SESSION_COOKIE,
+    AuthUser, SESSION_COOKIE, clear_cookie, generate_token, hash_password, session_cookie,
+    session_expiry, verify_password,
 };
 use crate::state::AppState;
 
@@ -24,12 +24,19 @@ fn validate(username: &str, password: &str) -> Result<(), ApiError> {
         return Err((StatusCode::BAD_REQUEST, "username is required".into()));
     }
     if password.len() < 8 {
-        return Err((StatusCode::BAD_REQUEST, "password must be at least 8 characters".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "password must be at least 8 characters".into(),
+        ));
     }
     Ok(())
 }
 
-async fn issue_session(state: &AppState, jar: CookieJar, user_id: &str) -> Result<CookieJar, ApiError> {
+async fn issue_session(
+    state: &AppState,
+    jar: CookieJar,
+    user_id: &str,
+) -> Result<CookieJar, ApiError> {
     let token = generate_token();
     state
         .db
@@ -74,7 +81,10 @@ pub async fn setup(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let jar = issue_session(&state, jar, &id).await?;
-    Ok((jar, Json(json!({ "id": id, "username": body.username, "role": "admin" }))))
+    Ok((
+        jar,
+        Json(json!({ "id": id, "username": body.username, "role": "admin" })),
+    ))
 }
 
 pub async fn login(
@@ -93,11 +103,19 @@ pub async fn login(
     // half failed.
     let user = match user {
         Some(u) if verify_password(&body.password, &u.password_hash) => u,
-        _ => return Err((StatusCode::UNAUTHORIZED, "invalid username or password".into())),
+        _ => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                "invalid username or password".into(),
+            ));
+        }
     };
 
     let jar = issue_session(&state, jar, &user.id).await?;
-    Ok((jar, Json(json!({ "id": user.id, "username": user.username, "role": user.role }))))
+    Ok((
+        jar,
+        Json(json!({ "id": user.id, "username": user.username, "role": user.role })),
+    ))
 }
 
 pub async fn logout(

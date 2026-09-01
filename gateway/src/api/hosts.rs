@@ -1,9 +1,9 @@
 //! Host (formerly "environment") CRUD — served entirely from the gateway DB.
 
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
 };
 
 use crate::api::{Page, PageQuery};
@@ -29,7 +29,12 @@ pub async fn list(
         .list_environments_page(search.as_deref(), per_page as i64, offset)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(Page { items, total, page, per_page }))
+    Ok(Json(Page {
+        items,
+        total,
+        page,
+        per_page,
+    }))
 }
 
 pub async fn create(
@@ -47,7 +52,12 @@ pub async fn create(
         .get_environment(&id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "not found after insert".into()))?;
+        .ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "not found after insert".into(),
+            )
+        })?;
 
     Ok(Json(env))
 }
@@ -84,7 +94,10 @@ pub async fn delete(
         .ok_or_else(|| (StatusCode::NOT_FOUND, format!("host {id} not found")))?;
 
     if env.is_local {
-        return Err((StatusCode::BAD_REQUEST, "cannot delete the local host".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "cannot delete the local host".into(),
+        ));
     }
 
     state

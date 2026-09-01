@@ -2,13 +2,13 @@
 //! everything here requires an authenticated admin.
 
 use axum::{
+    Extension, Json,
     extract::{Path, State},
     http::StatusCode,
-    Extension, Json,
 };
 use serde::Deserialize;
 
-use crate::auth::{hash_password, require_admin, AuthUser};
+use crate::auth::{AuthUser, hash_password, require_admin};
 use crate::state::AppState;
 use crate::storage::models::User;
 
@@ -51,10 +51,16 @@ pub async fn create(
         return Err((StatusCode::BAD_REQUEST, "username is required".into()));
     }
     if body.password.len() < 8 {
-        return Err((StatusCode::BAD_REQUEST, "password must be at least 8 characters".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "password must be at least 8 characters".into(),
+        ));
     }
     if !valid_role(&body.role) {
-        return Err((StatusCode::BAD_REQUEST, "role must be 'admin' or 'viewer'".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "role must be 'admin' or 'viewer'".into(),
+        ));
     }
 
     if state
@@ -79,7 +85,10 @@ pub async fn create(
         .get_user(&id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "not found after insert".to_string()))?;
+        .ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "not found after insert".to_string(),
+        ))?;
 
     Ok((StatusCode::CREATED, Json(created)))
 }
@@ -107,7 +116,10 @@ pub async fn update(
 
     if let Some(role) = &body.role {
         if !valid_role(role) {
-            return Err((StatusCode::BAD_REQUEST, "role must be 'admin' or 'viewer'".into()));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "role must be 'admin' or 'viewer'".into(),
+            ));
         }
         // Don't allow demoting the last remaining admin.
         if target.role == "admin" && role != "admin" {
@@ -117,7 +129,10 @@ pub async fn update(
                 .await
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             if admins <= 1 {
-                return Err((StatusCode::BAD_REQUEST, "cannot demote the last admin".into()));
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "cannot demote the last admin".into(),
+                ));
             }
         }
         state
@@ -129,7 +144,10 @@ pub async fn update(
 
     if let Some(password) = &body.password {
         if password.len() < 8 {
-            return Err((StatusCode::BAD_REQUEST, "password must be at least 8 characters".into()));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "password must be at least 8 characters".into(),
+            ));
         }
         let hash = hash_password(password).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
         state
@@ -158,7 +176,10 @@ pub async fn delete(
     require_admin(&user)?;
 
     if id == user.id {
-        return Err((StatusCode::BAD_REQUEST, "you cannot delete your own account".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "you cannot delete your own account".into(),
+        ));
     }
 
     let target = state
@@ -175,7 +196,10 @@ pub async fn delete(
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         if admins <= 1 {
-            return Err((StatusCode::BAD_REQUEST, "cannot delete the last admin".into()));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "cannot delete the last admin".into(),
+            ));
         }
     }
 

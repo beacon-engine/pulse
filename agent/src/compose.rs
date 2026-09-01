@@ -90,7 +90,12 @@ async fn run_compose(
 }
 
 pub async fn up(docker_host: &str, stack: &ComposeStack) -> Result<String, String> {
-    run_compose(docker_host, stack, &["up", "-d", "--build", "--remove-orphans"]).await
+    run_compose(
+        docker_host,
+        stack,
+        &["up", "-d", "--build", "--remove-orphans"],
+    )
+    .await
 }
 
 pub async fn down(docker_host: &str, stack: &ComposeStack) -> Result<String, String> {

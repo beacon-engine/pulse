@@ -1,7 +1,7 @@
 //! Recent container lifecycle events, served from the gateway DB (populated by
 //! the event watcher — see `crate::watcher`).
 
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{Json, extract::State, http::StatusCode};
 
 use crate::state::AppState;
 use crate::storage::models::ContainerEvent;

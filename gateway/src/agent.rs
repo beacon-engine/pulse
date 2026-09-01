@@ -8,7 +8,7 @@
 use axum::http::StatusCode;
 use tokio::net::TcpStream;
 
-use protocol::wire::{read_frame, write_frame, Request, Response};
+use protocol::wire::{Request, Response, read_frame, write_frame};
 
 #[derive(Clone)]
 pub struct AgentClient {

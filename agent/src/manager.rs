@@ -13,7 +13,9 @@ pub struct DockerManager {
 
 impl DockerManager {
     pub fn new() -> Self {
-        Self { connections: RwLock::new(HashMap::new()) }
+        Self {
+            connections: RwLock::new(HashMap::new()),
+        }
     }
 
     /// Returns a cached Docker client for the connection string, connecting on

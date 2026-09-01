@@ -2,9 +2,9 @@
 //! `docker compose` on the agent.
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use uuid::Uuid;
 
@@ -95,13 +95,20 @@ pub async fn delete(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     // Best-effort teardown before removing the record.
-    if let Ok(stack) = load_stack(&state, &id).await {
-        if let Ok(docker_host) = resolve_docker_host(&state, &stack.host_id).await {
-            let _ = state
-                .agent
-                .call(Request::ComposeDown { docker_host, stack: compose_stack(&stack) })
-                .await;
-        }
+    if let Some((stack, docker_host)) = async {
+        let stack = load_stack(&state, &id).await.ok()?;
+        let docker_host = resolve_docker_host(&state, &stack.host_id).await.ok()?;
+        Some((stack, docker_host))
+    }
+    .await
+    {
+        let _ = state
+            .agent
+            .call(Request::ComposeDown {
+                docker_host,
+                stack: compose_stack(&stack),
+            })
+            .await;
     }
 
     state
@@ -124,7 +131,10 @@ pub async fn up(
 
     let output = match state
         .agent
-        .call(Request::ComposeUp { docker_host, stack: compose_stack(&stack) })
+        .call(Request::ComposeUp {
+            docker_host,
+            stack: compose_stack(&stack),
+        })
         .await
     {
         Response::Text(out) => out,
@@ -140,7 +150,11 @@ pub async fn up(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(StackOpResponse { id, status: "running".into(), output }))
+    Ok(Json(StackOpResponse {
+        id,
+        status: "running".into(),
+        output,
+    }))
 }
 
 pub async fn down(
@@ -152,7 +166,10 @@ pub async fn down(
 
     let output = match state
         .agent
-        .call(Request::ComposeDown { docker_host, stack: compose_stack(&stack) })
+        .call(Request::ComposeDown {
+            docker_host,
+            stack: compose_stack(&stack),
+        })
         .await
     {
         Response::Text(out) => out,
@@ -165,7 +182,11 @@ pub async fn down(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(StackOpResponse { id, status: "created".into(), output }))
+    Ok(Json(StackOpResponse {
+        id,
+        status: "created".into(),
+        output,
+    }))
 }
 
 // ── Webhook token ─────────────────────────────────────────────────────────────

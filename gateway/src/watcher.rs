@@ -7,7 +7,7 @@ use std::time::Duration;
 use crate::observability::{alerts, metrics, websocket};
 use crate::state::AppState;
 
-use protocol::wire::{read_frame, EventFrame, Response};
+use protocol::wire::{EventFrame, Response, read_frame};
 
 /// Watches events for the agent's local Docker daemon, reconnecting on failure.
 pub async fn run(state: AppState) {
