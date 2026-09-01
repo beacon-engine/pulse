@@ -22,14 +22,13 @@ COPY protocol ./protocol
 COPY agent ./agent
 COPY gateway ./gateway
 
-# Build binaries with persistent cargo cache
+# Build release binaries for both packages
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/target \
-    cargo build --release --manifest-path agent/Cargo.toml && \
-    cargo build --release --manifest-path gateway/Cargo.toml && \
-    cp /build/target/release/pulse-agent /build/agent-bin && \
-    cp /build/target/release/pulse-gateway /build/gateway-bin
+    cargo build --release -p agent -p gateway && \
+    cp /build/target/release/agent /build/agent-bin && \
+    cp /build/target/release/gateway /build/gateway-bin
 
 # ─────────────────────────────── Target 1: Agent ─────────────────────────────
 FROM debian:bookworm-slim AS agent
