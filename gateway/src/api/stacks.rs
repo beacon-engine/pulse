@@ -95,16 +95,20 @@ pub async fn delete(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     // Best-effort teardown before removing the record.
-    if let Ok(stack) = load_stack(&state, &id).await {
-        if let Ok(docker_host) = resolve_docker_host(&state, &stack.host_id).await {
-            let _ = state
-                .agent
-                .call(Request::ComposeDown {
-                    docker_host,
-                    stack: compose_stack(&stack),
-                })
-                .await;
-        }
+    if let Some((stack, docker_host)) = async {
+        let stack = load_stack(&state, &id).await.ok()?;
+        let docker_host = resolve_docker_host(&state, &stack.host_id).await.ok()?;
+        Some((stack, docker_host))
+    }
+    .await
+    {
+        let _ = state
+            .agent
+            .call(Request::ComposeDown {
+                docker_host,
+                stack: compose_stack(&stack),
+            })
+            .await;
     }
 
     state

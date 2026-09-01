@@ -116,11 +116,11 @@ pub async fn require_auth(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or((StatusCode::UNAUTHORIZED, "invalid session".to_string()))?;
 
-    if let Ok(exp) = chrono::DateTime::parse_from_rfc3339(&session.expires_at) {
-        if exp.with_timezone(&Utc) < Utc::now() {
-            let _ = state.db.delete_session(&token).await;
-            return Err((StatusCode::UNAUTHORIZED, "session expired".into()));
-        }
+    if let Ok(exp) = chrono::DateTime::parse_from_rfc3339(&session.expires_at)
+        && exp.with_timezone(&Utc) < Utc::now()
+    {
+        let _ = state.db.delete_session(&token).await;
+        return Err((StatusCode::UNAUTHORIZED, "session expired".into()));
     }
 
     let user = state

@@ -18,7 +18,7 @@ pub async fn handle(socket: WebSocket, tx: Arc<EventSender>) {
         loop {
             match rx.recv().await {
                 Ok(msg) => {
-                    if sender.send(Message::Text(msg.into())).await.is_err() {
+                    if sender.send(Message::Text(msg)).await.is_err() {
                         break;
                     }
                 }

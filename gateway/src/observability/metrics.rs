@@ -74,10 +74,10 @@ pub fn record_event(event: &str) {
 }
 
 pub fn render() -> String {
-    if let Some(m) = METRICS.get() {
-        if let Some(t) = START_TIME.get() {
-            m.uptime_seconds.set(t.elapsed().as_secs_f64());
-        }
+    if let Some(m) = METRICS.get()
+        && let Some(t) = START_TIME.get()
+    {
+        m.uptime_seconds.set(t.elapsed().as_secs_f64());
     }
     TextEncoder::new()
         .encode_to_string(&prometheus::gather())
