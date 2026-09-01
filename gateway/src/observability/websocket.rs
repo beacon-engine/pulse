@@ -2,6 +2,7 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
 use tokio::sync::broadcast;
+use tokio::sync::broadcast::error::RecvError;
 
 pub type EventSender = broadcast::Sender<String>;
 
@@ -14,9 +15,15 @@ pub async fn handle(socket: WebSocket, tx: Arc<EventSender>) {
     let (mut sender, mut receiver) = socket.split();
 
     let mut send_task = tokio::spawn(async move {
-        while let Ok(msg) = rx.recv().await {
-            if sender.send(Message::Text(msg.into())).await.is_err() {
-                break;
+        loop {
+            match rx.recv().await {
+                Ok(msg) => {
+                    if sender.send(Message::Text(msg.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => break,
             }
         }
     });

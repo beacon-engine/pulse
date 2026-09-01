@@ -288,9 +288,7 @@ pub async fn recreate_latest(
             None,
         );
         while let Some(result) = stream.next().await {
-            if let Err(e) = result {
-                return Err(e);
-            }
+            result?;
         }
     }
 
@@ -441,7 +439,7 @@ pub async fn system_info(docker: &Docker) -> Result<SystemInfo, bollard::errors:
         containers_running: info.containers_running.unwrap_or(0),
         containers_stopped: info.containers_paused.unwrap_or(0)
             + info.containers_stopped.unwrap_or(0),
-        images: info.images.unwrap_or(0) as i64,
+        images: info.images.unwrap_or(0),
     })
 }
 
@@ -811,7 +809,7 @@ fn statvfs_bytes(path: &str) -> Option<(u64, u64)> {
         if libc::statvfs(c_path.as_ptr(), &mut stat) != 0 {
             return None;
         }
-        let frsize = stat.f_frsize as u64;
+        let frsize = stat.f_frsize;
         let total = (stat.f_blocks as u64).saturating_mul(frsize);
         let available = (stat.f_bavail as u64).saturating_mul(frsize);
         Some((total, available))
