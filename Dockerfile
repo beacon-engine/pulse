@@ -26,7 +26,7 @@ COPY gateway ./gateway
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/target \
-    cargo build --release -p agent -p gateway && \
+    cargo build --release -p pulse-core -p gateway && \
     cp /build/target/release/agent /build/agent-bin && \
     cp /build/target/release/gateway /build/gateway-bin
 
