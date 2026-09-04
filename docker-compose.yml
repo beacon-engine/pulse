@@ -24,6 +24,7 @@ services:
       HTTP_PORT: "8080"
       STATIC_DIR: /app/dist
       DATABASE_URL: sqlite:///data/pulse.db
+      PULSE_TELEMETRY_ENABLED: false
     volumes:
       - pulse-data:/data
     depends_on:

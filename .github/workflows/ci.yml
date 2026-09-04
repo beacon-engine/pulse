@@ -32,6 +32,8 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # `--all-targets` covers unit tests plus the integration tests under each
+      # crate's `tests/` folder (e.g. agent/tests/*.rs).
       - name: Run Tests
         run: cargo test --workspace --all-targets --verbose
 
