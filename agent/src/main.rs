@@ -5,14 +5,6 @@
 //! keeps no database of its own: the gateway resolves each host to a
 //! `docker_host` connection string and passes it on every request.
 
-mod compose;
-mod config;
-mod docker;
-mod events;
-mod kubernetes;
-mod manager;
-mod swarm;
-
 use std::fmt::Display;
 use std::sync::Arc;
 
@@ -20,12 +12,15 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::RwLock;
 
 use protocol::wire::{read_frame, write_frame, Request, Response};
+use pulse_core::{compose, config, docker, events, kubernetes, manager, swarm};
 
 struct AppState {
     docker: Arc<manager::DockerManager>,
     /// Cached Kubernetes client, connected lazily so a kubeconfig that appears
     /// after startup is picked up without restarting the agent.
     k8s: Arc<RwLock<Option<kube::Client>>>,
+    /// Where to source Kubernetes credentials from on (re)connect.
+    k8s_target: kubernetes::K8sTarget,
 }
 
 /// Returns a Kubernetes client, connecting (and caching) on first use or if a
@@ -34,7 +29,7 @@ async fn k8s_client(state: &AppState) -> Option<kube::Client> {
     if let Some(c) = state.k8s.read().await.as_ref() {
         return Some(c.clone());
     }
-    match kubernetes::connect().await {
+    match kubernetes::connect(state.k8s_target.clone()).await {
         Ok(c) => {
             *state.k8s.write().await = Some(c.clone());
             Some(c)
@@ -48,10 +43,11 @@ async fn main() {
     println!("Starting Pulse agent v0.1.0");
 
     let cfg = config::Config::from_env();
+    let k8s_target = cfg.k8s_target();
 
     // Best-effort initial connect; if it fails we retry lazily per request.
     let k8s = Arc::new(RwLock::new(None));
-    match kubernetes::connect().await {
+    match kubernetes::connect(k8s_target.clone()).await {
         Ok(client) => {
             println!("Kubernetes connected");
             *k8s.write().await = Some(client);
@@ -62,6 +58,7 @@ async fn main() {
     let state = Arc::new(AppState {
         docker: Arc::new(manager::DockerManager::new()),
         k8s,
+        k8s_target,
     });
 
     let addr = format!("0.0.0.0:{}", cfg.port);
