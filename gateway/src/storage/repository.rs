@@ -34,6 +34,7 @@ pub trait Repository: Send + Sync {
         &self,
         name: &str,
         docker_host: &str,
+        agent_id: Option<&str>,
     ) -> Result<String, sqlx::Error>;
 
     async fn rename_environment(&self, id: &str, name: &str) -> Result<(), sqlx::Error>;

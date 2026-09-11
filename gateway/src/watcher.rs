@@ -43,7 +43,7 @@ pub async fn run(state: AppState) {
     }
 }
 
-async fn handle_event(state: &AppState, frame: EventFrame) {
+pub(crate) async fn handle_event(state: &AppState, frame: EventFrame) {
     let (event_type, alert_msg) = match frame.action.as_str() {
         "die" => {
             let exit_code = frame.exit_code.as_deref().unwrap_or("?");

@@ -9,7 +9,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::agent::unexpected;
-use crate::api::resolve_docker_host;
+use crate::api::resolve_target;
 use crate::state::AppState;
 use crate::storage::models::SavedStack;
 
@@ -95,19 +95,22 @@ pub async fn delete(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     // Best-effort teardown before removing the record.
-    if let Some((stack, docker_host)) = async {
+    if let Some((stack, agent_id, docker_host)) = async {
         let stack = load_stack(&state, &id).await.ok()?;
-        let docker_host = resolve_docker_host(&state, &stack.host_id).await.ok()?;
-        Some((stack, docker_host))
+        let (agent_id, docker_host) = resolve_target(&state, &stack.host_id).await.ok()?;
+        Some((stack, agent_id, docker_host))
     }
     .await
     {
         let _ = state
             .agent
-            .call(Request::ComposeDown {
-                docker_host,
-                stack: compose_stack(&stack),
-            })
+            .call_on(
+                agent_id.as_deref(),
+                Request::ComposeDown {
+                    docker_host,
+                    stack: compose_stack(&stack),
+                },
+            )
             .await;
     }
 
@@ -127,14 +130,17 @@ pub async fn up(
     Path(id): Path<String>,
 ) -> Result<Json<StackOpResponse>, ApiError> {
     let stack = load_stack(&state, &id).await?;
-    let docker_host = resolve_docker_host(&state, &stack.host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &stack.host_id).await?;
 
     let output = match state
         .agent
-        .call(Request::ComposeUp {
-            docker_host,
-            stack: compose_stack(&stack),
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::ComposeUp {
+                docker_host,
+                stack: compose_stack(&stack),
+            },
+        )
         .await
     {
         Response::Text(out) => out,
@@ -162,14 +168,17 @@ pub async fn down(
     Path(id): Path<String>,
 ) -> Result<Json<StackOpResponse>, ApiError> {
     let stack = load_stack(&state, &id).await?;
-    let docker_host = resolve_docker_host(&state, &stack.host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &stack.host_id).await?;
 
     let output = match state
         .agent
-        .call(Request::ComposeDown {
-            docker_host,
-            stack: compose_stack(&stack),
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::ComposeDown {
+                docker_host,
+                stack: compose_stack(&stack),
+            },
+        )
         .await
     {
         Response::Text(out) => out,

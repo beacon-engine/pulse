@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::agent::unexpected;
-use crate::api::resolve_docker_host;
+use crate::api::resolve_target;
 use crate::state::AppState;
 
 use protocol::data::{container::ContainerInfo, orchestration::ScaleQuery};
@@ -120,14 +120,17 @@ pub async fn deploy_container(
     )
     .await?;
 
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
 
     // Find the container id by name via the agent.
     let containers: Vec<ContainerInfo> = match state
         .agent
-        .call(Request::ListContainers {
-            docker_host: docker_host.clone(),
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::ListContainers {
+                docker_host: docker_host.clone(),
+            },
+        )
         .await
     {
         Response::Containers(v) => v,
@@ -146,11 +149,14 @@ pub async fn deploy_container(
     let pull = params.pull.unwrap_or(true);
     match state
         .agent
-        .call(Request::RecreateLatest {
-            docker_host,
-            id: target.id.clone(),
-            pull,
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::RecreateLatest {
+                docker_host,
+                id: target.id.clone(),
+                pull,
+            },
+        )
         .await
     {
         Response::Id(id) => Ok(Json(ContainerWebhookResponse { id, pulled: pull })),
@@ -170,15 +176,18 @@ pub async fn recreate_container(
     Path((host_id, container_id)): Path<(String, String)>,
     Query(params): Query<RecreateQuery>,
 ) -> Result<Json<ContainerWebhookResponse>, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     let pull = params.pull.unwrap_or(false);
     match state
         .agent
-        .call(Request::RecreateLatest {
-            docker_host,
-            id: container_id,
-            pull,
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::RecreateLatest {
+                docker_host,
+                id: container_id,
+                pull,
+            },
+        )
         .await
     {
         Response::Id(id) => Ok(Json(ContainerWebhookResponse { id, pulled: pull })),
@@ -235,7 +244,7 @@ pub async fn redeploy_stack(
         }
     }
 
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     let compose = ComposeStack {
         id: stack.id.clone(),
         name: stack.name.clone(),
@@ -248,10 +257,13 @@ pub async fn redeploy_stack(
     if params.pull.unwrap_or(false) {
         match state
             .agent
-            .call(Request::ComposePull {
-                docker_host: docker_host.clone(),
-                stack: compose.clone(),
-            })
+            .call_on(
+                agent_id.as_deref(),
+                Request::ComposePull {
+                    docker_host: docker_host.clone(),
+                    stack: compose.clone(),
+                },
+            )
             .await
         {
             Response::Text(out) => {
@@ -270,10 +282,13 @@ pub async fn redeploy_stack(
 
     match state
         .agent
-        .call(Request::ComposeUp {
-            docker_host,
-            stack: compose,
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::ComposeUp {
+                docker_host,
+                stack: compose,
+            },
+        )
         .await
     {
         Response::Text(up_out) => {
@@ -312,13 +327,16 @@ pub async fn update_swarm_service(
     )
     .await?;
 
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::UpdateSwarmService {
-            docker_host,
-            service_id: service_id.clone(),
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::UpdateSwarmService {
+                docker_host,
+                service_id: service_id.clone(),
+            },
+        )
         .await
     {
         Response::Ok => Ok(Json(SwarmWebhookResponse {
@@ -342,14 +360,17 @@ pub async fn scale_swarm_service(
         params.token.as_deref(),
     )
     .await?;
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::ScaleSwarmService {
-            docker_host,
-            service_id: service_id.clone(),
-            target_replicas: params.target_replicas.unwrap_or(1),
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::ScaleSwarmService {
+                docker_host,
+                service_id: service_id.clone(),
+                target_replicas: params.target_replicas.unwrap_or(1),
+            },
+        )
         .await
     {
         Response::Ok => Ok(Json(SwarmWebhookResponse {
@@ -384,12 +405,16 @@ pub async fn k8s_rollout(
     )
     .await?;
 
+    let (agent_id, _docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::K8sRollout {
-            namespace: namespace.clone(),
-            deployment: deployment.clone(),
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::K8sRollout {
+                namespace: namespace.clone(),
+                deployment: deployment.clone(),
+            },
+        )
         .await
     {
         Response::Ok => Ok(Json(K8sRolloutResponse {

@@ -11,6 +11,9 @@ export default defineConfig({
       '/api': 'http://localhost:8090',
       '/metrics': 'http://localhost:8090',
       '/ws': { target: 'ws://localhost:8090', ws: true },
+      // '/api': 'http://localhost:9080',
+      // '/metrics': 'http://localhost:9080',
+      // '/ws': { target: 'ws://localhost:9080', ws: true },
     },
   },
 });

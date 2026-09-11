@@ -13,4 +13,5 @@
 pub mod data;
 pub mod host;
 pub mod protocol;
+pub mod transport;
 pub mod wire;

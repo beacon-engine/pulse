@@ -10,6 +10,14 @@ tokio = { version = "1.36", features = ["full"] }
 # Web framework
 axum = { version = "0.7", features = ["ws"] }
 
+# Native TLS serving (WSS) via rustls. `no-provider` keeps the crypto provider
+# choice ours — we install `ring` (matching the rest of the tree; no OpenSSL,
+# no aws-lc-rs C build).
+axum-server = { version = "0.7", default-features = false, features = [
+    "tls-rustls-no-provider",
+] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+
 # JSON serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

@@ -250,6 +250,30 @@ pub enum Response {
     },
 }
 
+/// Reserved correlation id for unsolicited event pushes (the live Docker event
+/// feed). Events are emitted by the agent rather than answering a request, so
+/// they never collide with a real request id (which start at 1).
+pub const EVENT_STREAM_ID: u64 = 0;
+
+/// A gateway→agent request tagged with a correlation id.
+///
+/// The single WebSocket session multiplexes many concurrent exchanges plus the
+/// event feed, so — unlike the legacy one-connection-per-request TCP path — each
+/// message carries an `id` the reply echoes back. See [`ResponseFrame`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestFrame {
+    pub id: u64,
+    pub req: Request,
+}
+
+/// An agent→gateway message. For a reply, `id` echoes the originating
+/// [`RequestFrame::id`]; for a pushed event it is [`EVENT_STREAM_ID`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResponseFrame {
+    pub id: u64,
+    pub resp: Response,
+}
+
 /// Largest frame we will read — guards against a corrupt/hostile length prefix.
 const MAX_FRAME: usize = 64 * 1024 * 1024;
 

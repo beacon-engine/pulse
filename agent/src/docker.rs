@@ -640,7 +640,7 @@ pub async fn exec_command(
 
 // ── Hardware metrics (local machine) ──────────────────────────────────────────
 
-pub fn hardware_metrics() -> HardwareMetrics {
+pub fn hardware_metrics(host_root: &str) -> HardwareMetrics {
     use sysinfo::System;
 
     let mut sys = System::new();
@@ -658,7 +658,7 @@ pub fn hardware_metrics() -> HardwareMetrics {
         mem_used,
         mem_total,
         mem_pct,
-        disks: disk_metrics(),
+        disks: disk_metrics(host_root),
     }
 }
 
@@ -672,11 +672,9 @@ pub fn hardware_metrics() -> HardwareMetrics {
 ///
 /// Note: on Docker Desktop (Windows/macOS) the "host" is the Docker Linux VM, not
 /// the physical machine. To monitor a Windows/macOS host, run the agent natively.
-fn disk_metrics() -> Vec<DiskInfo> {
-    let host_root = std::env::var("HOST_ROOT").unwrap_or_default();
-
+fn disk_metrics(host_root: &str) -> Vec<DiskInfo> {
     if !host_root.is_empty() && host_root != "/" {
-        return host_disk_metrics(&host_root);
+        return host_disk_metrics(host_root);
     }
 
     if in_container() {

@@ -81,7 +81,7 @@ impl Repository for SqliteRepository {
         // Local host first, then newest; LIKE is case-insensitive for ASCII.
         let pattern = format!("%{}%", search.unwrap_or(""));
         let rows = sqlx::query(
-            "SELECT id, name, docker_host, is_local, created_at FROM environments
+            "SELECT id, name, docker_host, is_local, created_at, agent_id FROM environments
              WHERE name LIKE ?
              ORDER BY is_local DESC, created_at ASC
              LIMIT ? OFFSET ?",
@@ -105,7 +105,7 @@ impl Repository for SqliteRepository {
 
     async fn get_environment(&self, id: &str) -> Result<Option<Environment>, sqlx::Error> {
         let row = sqlx::query(
-            "SELECT id, name, docker_host, is_local, created_at FROM environments WHERE id = ?",
+            "SELECT id, name, docker_host, is_local, created_at, agent_id FROM environments WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -118,14 +118,16 @@ impl Repository for SqliteRepository {
         &self,
         name: &str,
         docker_host: &str,
+        agent_id: Option<&str>,
     ) -> Result<String, sqlx::Error> {
         let id = Uuid::new_v4().to_string();
         sqlx::query(
-            "INSERT INTO environments (id, name, docker_host, is_local) VALUES (?, ?, ?, 0)",
+            "INSERT INTO environments (id, name, docker_host, is_local, agent_id) VALUES (?, ?, ?, 0, ?)",
         )
         .bind(&id)
         .bind(name)
         .bind(docker_host)
+        .bind(agent_id)
         .execute(&self.pool)
         .await?;
         Ok(id)
@@ -465,6 +467,7 @@ fn row_to_env(r: &SqliteRow) -> Environment {
         docker_host: r.get("docker_host"),
         is_local: r.get::<i64, _>("is_local") != 0,
         created_at: r.get("created_at"),
+        agent_id: r.get("agent_id"),
     }
 }
 
