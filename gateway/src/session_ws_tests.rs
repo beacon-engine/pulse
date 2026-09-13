@@ -121,10 +121,7 @@ fn spawn_fake_agent(ws: protocol::transport::WsStream) {
                 if !delay.is_zero() {
                     tokio::time::sleep(delay).await;
                 }
-                let reply = ResponseFrame {
-                    id: frame.id,
-                    resp,
-                };
+                let reply = ResponseFrame { id: frame.id, resp };
                 let _ = tx.send(serde_json::to_string(&reply).unwrap());
             });
         }

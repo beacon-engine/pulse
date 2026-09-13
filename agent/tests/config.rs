@@ -1,9 +1,9 @@
 //! Integration tests for agent configuration and the config → Kubernetes target
 //! mapping. Exercises `pulse_core::config` through its public API.
 
+use protocol::transport::TlsMode;
 use pulse_core::config::{AgentMode, Config};
 use pulse_core::kubernetes::K8sTarget;
-use protocol::transport::TlsMode;
 
 /// A Config with only the field under test set; the rest take listen-mode defaults.
 fn cfg_with(kubeconfig_yaml: Option<String>) -> Config {

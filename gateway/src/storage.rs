@@ -55,7 +55,10 @@ async fn connect(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
 /// Drops and recreates the database at `database_url` (dev reset path). Destroys
 /// all data — only reached when `PULSE_DB_RESET_ON_MISMATCH` is truthy.
 async fn reset_database(database_url: &str) -> Result<(), sqlx::Error> {
-    if sqlx::Sqlite::database_exists(database_url).await.unwrap_or(false) {
+    if sqlx::Sqlite::database_exists(database_url)
+        .await
+        .unwrap_or(false)
+    {
         sqlx::Sqlite::drop_database(database_url).await?;
     }
     sqlx::Sqlite::create_database(database_url).await

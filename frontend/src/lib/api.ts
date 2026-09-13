@@ -74,6 +74,8 @@ export class PulseClient {
 
   constructor(config: CreateAxiosDefaults = {}) {
     this.http = axios.create({
+      // Same-origin: the gateway serves this SPA and its API on one port, so a
+      // relative base resolves back to whatever host:port the app was loaded from.
       baseURL: "/api",
       headers: { "Content-Type": "application/json" },
       withCredentials: true,

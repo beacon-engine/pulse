@@ -1,19 +1,22 @@
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 
+// Dev-server proxy target: the running gateway. Override for your setup, e.g.
+//   PULSE_GATEWAY_TARGET=http://localhost:8090 npm run dev
+// This only affects `vite dev` — in production the gateway serves the built SPA
+// and the browser talks to it same-origin (see src/lib/api.ts, src/lib/websocket.ts).
+const gatewayTarget = process.env.PULSE_GATEWAY_TARGET ?? 'http://localhost:9080';
+// http -> ws, https -> wss (so the /ws proxy tracks the same host/scheme).
+const wsTarget = gatewayTarget.replace(/^http/, 'ws');
+
 export default defineConfig({
   plugins: [svelte()],
   server: {
     port: 9010,
     proxy: {
-      // Gateway HTTP port. 8080 collides with an existing container here, so the
-      // gateway is run on 8090 (HTTP_PORT=8090). Change both to match your setup.
-      '/api': 'http://localhost:8090',
-      '/metrics': 'http://localhost:8090',
-      '/ws': { target: 'ws://localhost:8090', ws: true },
-      // '/api': 'http://localhost:9080',
-      // '/metrics': 'http://localhost:9080',
-      // '/ws': { target: 'ws://localhost:9080', ws: true },
+      '/api': gatewayTarget,
+      '/metrics': gatewayTarget,
+      '/ws': { target: wsTarget, ws: true },
     },
   },
 });
