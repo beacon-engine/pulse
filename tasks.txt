@@ -9,3 +9,5 @@ Velero (Disaster recovery)
 Enterprise Integration Patterns
 Check out Tempo for traces
 Node affinity
+
+Add support for terraform

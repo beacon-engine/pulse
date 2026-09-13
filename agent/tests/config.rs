@@ -1,35 +1,40 @@
 //! Integration tests for agent configuration and the config → Kubernetes target
 //! mapping. Exercises `pulse_core::config` through its public API.
 
-use pulse_core::config::Config;
+use protocol::transport::TlsMode;
+use pulse_core::config::{AgentMode, Config};
 use pulse_core::kubernetes::K8sTarget;
+
+/// A Config with only the field under test set; the rest take listen-mode defaults.
+fn cfg_with(kubeconfig_yaml: Option<String>) -> Config {
+    Config {
+        mode: AgentMode::Listen,
+        port: 9000,
+        gateway_url: None,
+        gateway_token: None,
+        kubeconfig_yaml,
+        host_root: String::new(),
+        tls: TlsMode::Verify,
+    }
+}
 
 #[test]
 fn k8s_target_none_is_auto() {
-    let cfg = Config {
-        port: 9000,
-        kubeconfig_yaml: None,
-    };
-    assert_eq!(cfg.k8s_target(), K8sTarget::Auto);
+    assert_eq!(cfg_with(None).k8s_target(), K8sTarget::Auto);
 }
 
 #[test]
 fn k8s_target_blank_is_auto() {
-    let cfg = Config {
-        port: 9000,
-        kubeconfig_yaml: Some("  \n ".to_string()),
-    };
-    assert_eq!(cfg.k8s_target(), K8sTarget::Auto);
+    assert_eq!(
+        cfg_with(Some("  \n ".to_string())).k8s_target(),
+        K8sTarget::Auto
+    );
 }
 
 #[test]
 fn k8s_target_yaml_is_custom() {
-    let cfg = Config {
-        port: 9000,
-        kubeconfig_yaml: Some("apiVersion: v1".to_string()),
-    };
     assert_eq!(
-        cfg.k8s_target(),
+        cfg_with(Some("apiVersion: v1".to_string())).k8s_target(),
         K8sTarget::CustomYaml("apiVersion: v1".to_string())
     );
 }

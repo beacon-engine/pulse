@@ -9,6 +9,10 @@ pub struct Environment {
     pub docker_host: String,
     pub is_local: bool,
     pub created_at: String,
+    /// The push agent that represents this environment. `None` routes to the
+    /// default pull agent. See the gateway's `AgentRouter`.
+    #[serde(default)]
+    pub agent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

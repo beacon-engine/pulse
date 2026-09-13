@@ -27,7 +27,10 @@ mod state;
 mod storage;
 mod watcher;
 
-use agent::AgentClient;
+#[cfg(test)]
+mod session_ws_tests;
+
+use agent::{AgentClient, AgentRouter};
 use observability::{metrics, prometheus_proxy, websocket};
 use state::AppState;
 
@@ -39,9 +42,33 @@ async fn main() {
     metrics::init();
     metrics::init_events_counter();
 
-    let db = storage::init(&cfg.database_url)
-        .await
-        .expect("Failed to initialize database");
+    let db = match storage::init(&cfg.database_url, cfg.db_reset_on_mismatch).await {
+        Ok(db) => db,
+        Err(e) => {
+            eprintln!("Failed to initialize database: {e}");
+            if let sqlx::Error::Migrate(me) = &e {
+                match me.as_ref() {
+                    sqlx::migrate::MigrateError::VersionMismatch(v) => eprintln!(
+                        "\n  Migration {v} already ran on this database, but its SQL has since changed.\n  \
+                         Migrations are append-only — you likely edited an applied migration in place.\n  \
+                         Add a NEW numbered migration instead of editing {v}."
+                    ),
+                    sqlx::migrate::MigrateError::VersionMissing(v) => eprintln!(
+                        "\n  This database has migration {v} applied, but this binary doesn't include it.\n  \
+                         You're running a stale build or switched branches against a persistent DB.\n  \
+                         Rebuild from current source so the binary matches the database."
+                    ),
+                    _ => {}
+                }
+                eprintln!(
+                    "\n  To reset a THROWAWAY dev database (destroys all data):\n    \
+                     • set PULSE_DB_RESET_ON_MISMATCH=1 to auto-recreate on startup, or\n    \
+                     • delete the sqlite file (rm pulse.db*) / drop the Docker volume (docker compose down -v)."
+                );
+            }
+            std::process::exit(1);
+        }
+    };
     println!("Database ready at {}", cfg.database_url);
 
     if cfg.slack_webhook_url.is_some() {
@@ -49,7 +76,8 @@ async fn main() {
     }
 
     let state = AppState {
-        agent: AgentClient::new(cfg.agent_addr.clone()),
+        agent: AgentRouter::new(AgentClient::new(cfg.agent_addr.clone())),
+        agent_tokens: Arc::new(cfg.agent_tokens),
         db,
         events: Arc::new(websocket::new_channel()),
         slack_webhook: cfg.slack_webhook_url,
@@ -67,6 +95,8 @@ async fn main() {
             "/api/users/:id",
             axum::routing::put(api::users::update).delete(api::users::delete),
         )
+        // Connected push agents
+        .route("/api/agents", get(api::list_agents))
         // Hosts (formerly environments) — CRUD
         .route("/api/hosts", get(api::hosts::list).post(api::hosts::create))
         .route(
@@ -234,13 +264,13 @@ async fn main() {
         .route("/api/events", get(api::events::list_events))
         // Prometheus proxy
         .route("/api/prometheus/query", get(prometheus_proxy::query))
-        // Kubernetes
-        .route("/api/k8s/pods", get(api::k8s::pods))
+        // Kubernetes (scoped to the host whose agent represents the cluster)
+        .route("/api/hosts/:id/k8s/pods", get(api::k8s::pods))
         .route(
-            "/api/k8s/pods/:namespace/:name",
+            "/api/hosts/:id/k8s/pods/:namespace/:name",
             delete(api::k8s::delete_pod),
         )
-        .route("/api/k8s/namespaces", get(api::k8s::namespaces))
+        .route("/api/hosts/:id/k8s/namespaces", get(api::k8s::namespaces))
         .route("/ws", get(ws_handler))
         // Role gate runs after auth (reads AuthUser); auth runs outermost.
         .route_layer(middleware::from_fn(auth::enforce_role))
@@ -253,6 +283,8 @@ async fn main() {
     let public = Router::new()
         .route("/health", get(health_handler))
         .route("/api/status", get(status_handler))
+        // Agents dialing in (push mode). Auth is the bearer token on the upgrade.
+        .route("/agent/ws", get(api::agent_ws))
         .route(
             "/api/auth/setup",
             get(api::auth::setup_status).post(api::auth::setup),
@@ -284,14 +316,6 @@ async fn main() {
     };
 
     let http_addr = format!("0.0.0.0:{}", cfg.http_port);
-    let listener = tokio::net::TcpListener::bind(&http_addr)
-        .await
-        .unwrap_or_else(|_| panic!("Failed to bind to port {}", cfg.http_port));
-
-    println!(
-        "Pulse gateway listening on http://localhost:{}",
-        cfg.http_port
-    );
     println!(
         "Forwarding Docker operations to agent at {}",
         cfg.agent_addr
@@ -300,9 +324,41 @@ async fn main() {
     // Consume the agent's Docker event stream in the background.
     tokio::spawn(watcher::run(state.clone()));
 
-    axum::serve(listener, app)
-        .await
-        .expect("Server failed to start");
+    match (cfg.tls_cert_path, cfg.tls_key_path) {
+        // Native TLS: serve HTTPS/WSS directly with rustls (ring provider).
+        (Some(cert), Some(key)) => {
+            rustls::crypto::ring::default_provider()
+                .install_default()
+                .ok();
+            let tls = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert, &key)
+                .await
+                .unwrap_or_else(|e| panic!("Failed to load TLS cert/key ({cert}, {key}): {e}"));
+            let addr: std::net::SocketAddr = http_addr
+                .parse()
+                .unwrap_or_else(|_| panic!("Invalid bind address {http_addr}"));
+            println!(
+                "Pulse gateway listening on https://localhost:{}",
+                cfg.http_port
+            );
+            axum_server::bind_rustls(addr, tls)
+                .serve(app.into_make_service())
+                .await
+                .expect("TLS server failed to start");
+        }
+        // Plain HTTP (terminate TLS upstream at an ingress/LB).
+        _ => {
+            let listener = tokio::net::TcpListener::bind(&http_addr)
+                .await
+                .unwrap_or_else(|_| panic!("Failed to bind to port {}", cfg.http_port));
+            println!(
+                "Pulse gateway listening on http://localhost:{}",
+                cfg.http_port
+            );
+            axum::serve(listener, app)
+                .await
+                .expect("Server failed to start");
+        }
+    }
 }
 
 async fn health_handler() -> &'static str {

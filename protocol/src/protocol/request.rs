@@ -8,6 +8,10 @@ use crate::data::container::PortMap;
 pub struct CreateHostBody {
     pub name: String,
     pub docker_host: String,
+    /// Push agent that represents this environment. `None`/omitted uses the
+    /// default pull agent.
+    #[serde(default)]
+    pub agent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

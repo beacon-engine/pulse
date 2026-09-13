@@ -42,6 +42,8 @@ const RELEVANT_ACTIONS = new Set([
  * @returns
  */
 export function connect(onEvent: (e: WsEvent) => void): () => void {
+  // Same-origin: ws:// on http pages, wss:// on https, always the host:port the
+  // app was served from (which is the gateway).
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(`${protocol}//${location.host}/ws`);
 

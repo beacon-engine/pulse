@@ -43,7 +43,7 @@ pub async fn create(
 ) -> Result<Json<Environment>, (StatusCode, String)> {
     let id = state
         .db
-        .create_environment(&body.name, &body.docker_host)
+        .create_environment(&body.name, &body.docker_host, body.agent_id.as_deref())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

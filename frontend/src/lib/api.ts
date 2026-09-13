@@ -74,6 +74,8 @@ export class PulseClient {
 
   constructor(config: CreateAxiosDefaults = {}) {
     this.http = axios.create({
+      // Same-origin: the gateway serves this SPA and its API on one port, so a
+      // relative base resolves back to whatever host:port the app was loaded from.
       baseURL: "/api",
       headers: { "Content-Type": "application/json" },
       withCredentials: true,
@@ -90,7 +92,9 @@ export class PulseClient {
         return config;
       },
       (error) => {
-        loadingStore.stop();
+        if (!(error?.config as any)?.silent) {
+          loadingStore.stop();
+        }
         return Promise.reject(error);
       }
     );
@@ -116,6 +120,12 @@ export class PulseClient {
         return r;
       },
       (err) => {
+        // Balance the counter: a failed request still "started" the loader, so
+        // it must stop it — otherwise every error leaks a count and the bar
+        // animates forever with nothing in flight.
+        if (!(err?.config as any)?.silent) {
+          loadingStore.stop();
+        }
         const status = err?.response?.status;
         const url: string = err?.config?.url ?? "";
         // Ignore 401s from the auth probes themselves (expected when logged out).
@@ -636,19 +646,27 @@ export class PulseClient {
 
   // ── Kubernetes ─────────────────────────────────────────────────────────────
 
-  async getK8sPods(): Promise<K8sPod[]> {
-    const { data } = await this.http.get<K8sPod[]>("/k8s/pods");
+  async getK8sPods(hostId: string): Promise<K8sPod[]> {
+    const { data } = await this.http.get<K8sPod[]>(
+      `/hosts/${hostId}/k8s/pods`,
+    );
     return data;
   }
 
-  async getK8sNamespaces(): Promise<K8sNamespace[]> {
-    const { data } = await this.http.get<K8sNamespace[]>("/k8s/namespaces");
+  async getK8sNamespaces(hostId: string): Promise<K8sNamespace[]> {
+    const { data } = await this.http.get<K8sNamespace[]>(
+      `/hosts/${hostId}/k8s/namespaces`,
+    );
     return data;
   }
 
-  async deleteK8sPod(namespace: string, name: string): Promise<void> {
+  async deleteK8sPod(
+    hostId: string,
+    namespace: string,
+    name: string,
+  ): Promise<void> {
     await this.http.delete(
-      `/k8s/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
+      `/hosts/${hostId}/k8s/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
     );
   }
 }

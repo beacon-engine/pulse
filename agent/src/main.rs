@@ -5,6 +5,8 @@
 //! keeps no database of its own: the gateway resolves each host to a
 //! `docker_host` connection string and passes it on every request.
 
+mod uplink;
+
 use std::fmt::Display;
 use std::sync::Arc;
 
@@ -21,6 +23,8 @@ struct AppState {
     k8s: Arc<RwLock<Option<kube::Client>>>,
     /// Where to source Kubernetes credentials from on (re)connect.
     k8s_target: kubernetes::K8sTarget,
+    /// Host filesystem root as seen from the container, for disk metrics.
+    host_root: String,
 }
 
 /// Returns a Kubernetes client, connecting (and caching) on first use or if a
@@ -44,6 +48,7 @@ async fn main() {
 
     let cfg = config::Config::from_env();
     let k8s_target = cfg.k8s_target();
+    let tls = cfg.tls;
 
     // Best-effort initial connect; if it fails we retry lazily per request.
     let k8s = Arc::new(RwLock::new(None));
@@ -59,12 +64,36 @@ async fn main() {
         docker: Arc::new(manager::DockerManager::new()),
         k8s,
         k8s_target,
+        host_root: cfg.host_root.clone(),
     });
 
-    let addr = format!("0.0.0.0:{}", cfg.port);
+    match cfg.mode {
+        // Push: dial out to the gateway over WSS and serve requests there.
+        config::AgentMode::Dial => {
+            let Some(url) = cfg.gateway_url else {
+                eprintln!("BEACON_MODE=dial requires PULSE_GATEWAY_WS_URL; exiting");
+                return;
+            };
+            if cfg.gateway_token.is_none() {
+                println!(
+                    "warning: BEACON_TOKEN is unset — the gateway will reject the session unless it allows unauthenticated agents"
+                );
+            }
+            println!("Pulse agent dialing gateway at {url} (push mode)");
+            uplink::run(state, url, cfg.gateway_token, tls).await;
+        }
+        // Pull: bind a TCP socket and wait for the gateway to connect.
+        config::AgentMode::Listen => serve_tcp(state, cfg.port).await,
+    }
+}
+
+/// Accepts gateway connections on a TCP port and serves each until it closes
+/// (pull mode).
+async fn serve_tcp(state: Arc<AppState>, port: u16) {
+    let addr = format!("0.0.0.0:{port}");
     let listener = TcpListener::bind(&addr)
         .await
-        .unwrap_or_else(|_| panic!("Failed to bind to TCP port {}", cfg.port));
+        .unwrap_or_else(|_| panic!("Failed to bind to TCP port {port}"));
 
     println!("Pulse agent listening on tcp://{addr}");
 
@@ -265,7 +294,9 @@ async fn dispatch(state: &AppState, req: Request) -> Response {
                 Err(e) => exec_error(e),
             }
         }
-        Request::HardwareMetrics => Response::HardwareMetrics(docker::hardware_metrics()),
+        Request::HardwareMetrics => {
+            Response::HardwareMetrics(docker::hardware_metrics(&state.host_root))
+        }
 
         // ── Images ─────────────────────────────────────────────────────────────
         Request::ListImages { docker_host } => {

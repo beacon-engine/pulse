@@ -9,7 +9,7 @@ use axum::{
 };
 
 use crate::agent::unexpected;
-use crate::api::{Page, PageQuery, paginate, resolve_docker_host};
+use crate::api::{Page, PageQuery, paginate, resolve_target};
 use crate::observability::alerts;
 use crate::state::AppState;
 
@@ -33,10 +33,10 @@ pub async fn list_containers(
     State(state): State<AppState>,
     Path(host_id): Path<String>,
 ) -> Result<Json<Vec<ContainerInfo>>, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::ListContainers { docker_host })
+        .call_on(agent_id.as_deref(), Request::ListContainers { docker_host })
         .await
     {
         Response::Containers(v) => Ok(Json(v)),
@@ -48,13 +48,16 @@ pub async fn inspect_container(
     State(state): State<AppState>,
     Path((host_id, cid)): Path<(String, String)>,
 ) -> Result<Json<ContainerDetail>, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::InspectContainer {
-            docker_host,
-            id: cid,
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::InspectContainer {
+                docker_host,
+                id: cid,
+            },
+        )
         .await
     {
         Response::ContainerDetail(v) => Ok(Json(v)),
@@ -66,13 +69,16 @@ pub async fn inspect_raw_container(
     State(state): State<AppState>,
     Path((host_id, cid)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::InspectRawContainer {
-            docker_host,
-            id: cid,
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::InspectRawContainer {
+                docker_host,
+                id: cid,
+            },
+        )
         .await
     {
         Response::Raw(v) => Ok(Json(v)),
@@ -85,14 +91,17 @@ pub async fn recreate_container(
     Path((host_id, cid)): Path<(String, String)>,
     Json(body): Json<RecreateBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::RecreateContainer {
-            docker_host,
-            id: cid,
-            ports: body.ports,
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::RecreateContainer {
+                docker_host,
+                id: cid,
+                ports: body.ports,
+            },
+        )
         .await
     {
         Response::Id(id) => Ok(Json(serde_json::json!({ "id": id }))),
@@ -105,14 +114,17 @@ pub async fn update_container_env(
     Path((host_id, cid)): Path<(String, String)>,
     Json(body): Json<EnvBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::UpdateContainerEnv {
-            docker_host,
-            id: cid,
-            env: body.env,
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::UpdateContainerEnv {
+                docker_host,
+                id: cid,
+                env: body.env,
+            },
+        )
         .await
     {
         Response::Id(id) => Ok(Json(serde_json::json!({ "id": id }))),
@@ -125,14 +137,17 @@ pub async fn exec_container(
     Path((host_id, cid)): Path<(String, String)>,
     Json(body): Json<ExecBody>,
 ) -> Result<String, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::ExecContainer {
-            docker_host,
-            id: cid,
-            cmd: body.cmd,
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::ExecContainer {
+                docker_host,
+                id: cid,
+                cmd: body.cmd,
+            },
+        )
         .await
     {
         Response::Text(out) => Ok(out),
@@ -144,13 +159,16 @@ pub async fn start(
     State(state): State<AppState>,
     Path((host_id, cid)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::StartContainer {
-            docker_host,
-            id: cid.clone(),
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::StartContainer {
+                docker_host,
+                id: cid.clone(),
+            },
+        )
         .await
     {
         Response::Ok => {
@@ -167,13 +185,16 @@ pub async fn stop(
     State(state): State<AppState>,
     Path((host_id, cid)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::StopContainer {
-            docker_host,
-            id: cid.clone(),
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::StopContainer {
+                docker_host,
+                id: cid.clone(),
+            },
+        )
         .await
     {
         Response::Ok => {
@@ -190,13 +211,16 @@ pub async fn restart(
     State(state): State<AppState>,
     Path((host_id, cid)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::RestartContainer {
-            docker_host,
-            id: cid.clone(),
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::RestartContainer {
+                docker_host,
+                id: cid.clone(),
+            },
+        )
         .await
     {
         Response::Ok => {
@@ -214,15 +238,18 @@ pub async fn container_logs(
     Path((host_id, cid)): Path<(String, String)>,
     Query(params): Query<LogsQuery>,
 ) -> Result<String, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     let tail = params.tail.unwrap_or(200).min(2000);
     match state
         .agent
-        .call(Request::ContainerLogs {
-            docker_host,
-            id: cid,
-            tail,
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::ContainerLogs {
+                docker_host,
+                id: cid,
+                tail,
+            },
+        )
         .await
     {
         Response::Text(out) => Ok(out),
@@ -234,13 +261,16 @@ pub async fn get_container_networks(
     State(state): State<AppState>,
     Path((host_id, cid)): Path<(String, String)>,
 ) -> Result<Json<Vec<ContainerNetworkInfo>>, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::ContainerNetworks {
-            docker_host,
-            id: cid,
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::ContainerNetworks {
+                docker_host,
+                id: cid,
+            },
+        )
         .await
     {
         Response::ContainerNetworks(v) => Ok(Json(v)),
@@ -253,14 +283,17 @@ pub async fn network_connect(
     Path((host_id, cid)): Path<(String, String)>,
     Json(body): Json<NetworkBody>,
 ) -> Result<StatusCode, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::NetworkConnect {
-            docker_host,
-            network_id: body.network_id,
-            container_id: cid,
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::NetworkConnect {
+                docker_host,
+                network_id: body.network_id,
+                container_id: cid,
+            },
+        )
         .await
     {
         Response::Ok => Ok(StatusCode::NO_CONTENT),
@@ -273,14 +306,17 @@ pub async fn network_disconnect(
     Path((host_id, cid)): Path<(String, String)>,
     Json(body): Json<NetworkBody>,
 ) -> Result<StatusCode, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::NetworkDisconnect {
-            docker_host,
-            network_id: body.network_id,
-            container_id: cid,
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::NetworkDisconnect {
+                docker_host,
+                network_id: body.network_id,
+                container_id: cid,
+            },
+        )
         .await
     {
         Response::Ok => Ok(StatusCode::NO_CONTENT),
@@ -294,8 +330,12 @@ pub async fn get_system_info(
     State(state): State<AppState>,
     Path(host_id): Path<String>,
 ) -> Result<Json<SystemInfo>, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
-    match state.agent.call(Request::SystemInfo { docker_host }).await {
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
+    match state
+        .agent
+        .call_on(agent_id.as_deref(), Request::SystemInfo { docker_host })
+        .await
+    {
         Response::SystemInfo(v) => Ok(Json(v)),
         other => Err(unexpected(other)),
     }
@@ -305,9 +345,13 @@ pub async fn get_hardware_metrics(
     State(state): State<AppState>,
     Path(host_id): Path<String>,
 ) -> Result<Json<HardwareMetrics>, ApiError> {
-    // Verify the host exists; hardware metrics are for the agent's machine.
-    resolve_docker_host(&state, &host_id).await?;
-    match state.agent.call(Request::HardwareMetrics).await {
+    // Resolve the host's agent; hardware metrics are for that agent's machine.
+    let (agent_id, _docker_host) = resolve_target(&state, &host_id).await?;
+    match state
+        .agent
+        .call_on(agent_id.as_deref(), Request::HardwareMetrics)
+        .await
+    {
         Response::HardwareMetrics(v) => Ok(Json(v)),
         other => Err(unexpected(other)),
     }
@@ -320,8 +364,12 @@ pub async fn list_images(
     Path(host_id): Path<String>,
     Query(q): Query<PageQuery>,
 ) -> Result<Json<Page<ImageInfo>>, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
-    let all = match state.agent.call(Request::ListImages { docker_host }).await {
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
+    let all = match state
+        .agent
+        .call_on(agent_id.as_deref(), Request::ListImages { docker_host })
+        .await
+    {
         Response::Images(v) => v,
         other => return Err(unexpected(other)),
     };
@@ -345,13 +393,16 @@ pub async fn delete_image(
     State(state): State<AppState>,
     Path((host_id, image_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::DeleteImage {
-            docker_host,
-            id: image_id,
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::DeleteImage {
+                docker_host,
+                id: image_id,
+            },
+        )
         .await
     {
         Response::Ok => Ok(StatusCode::NO_CONTENT),
@@ -363,8 +414,12 @@ pub async fn prune_images(
     State(state): State<AppState>,
     Path(host_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
-    match state.agent.call(Request::PruneImages { docker_host }).await {
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
+    match state
+        .agent
+        .call_on(agent_id.as_deref(), Request::PruneImages { docker_host })
+        .await
+    {
         Response::Count(n) => Ok(Json(serde_json::json!({ "reclaimed": n }))),
         other => Err(unexpected(other)),
     }
@@ -377,8 +432,12 @@ pub async fn list_volumes(
     Path(host_id): Path<String>,
     Query(q): Query<PageQuery>,
 ) -> Result<Json<Page<VolumeInfo>>, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
-    let all = match state.agent.call(Request::ListVolumes { docker_host }).await {
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
+    let all = match state
+        .agent
+        .call_on(agent_id.as_deref(), Request::ListVolumes { docker_host })
+        .await
+    {
         Response::Volumes(v) => v,
         other => return Err(unexpected(other)),
     };
@@ -398,13 +457,16 @@ pub async fn delete_volume(
     State(state): State<AppState>,
     Path((host_id, vol_name)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::DeleteVolume {
-            docker_host,
-            name: vol_name,
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::DeleteVolume {
+                docker_host,
+                name: vol_name,
+            },
+        )
         .await
     {
         Response::Ok => Ok(StatusCode::NO_CONTENT),
@@ -416,10 +478,10 @@ pub async fn prune_volumes(
     State(state): State<AppState>,
     Path(host_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::PruneVolumes { docker_host })
+        .call_on(agent_id.as_deref(), Request::PruneVolumes { docker_host })
         .await
     {
         Response::Count(n) => Ok(Json(serde_json::json!({ "reclaimed": n }))),
@@ -433,10 +495,13 @@ pub async fn list_host_networks(
     State(state): State<AppState>,
     Path(host_id): Path<String>,
 ) -> Result<Json<Vec<HostNetwork>>, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::ListHostNetworks { docker_host })
+        .call_on(
+            agent_id.as_deref(),
+            Request::ListHostNetworks { docker_host },
+        )
         .await
     {
         Response::HostNetworks(v) => Ok(Json(v)),
@@ -450,10 +515,13 @@ pub async fn list_stacks(
     State(state): State<AppState>,
     Path(host_id): Path<String>,
 ) -> Result<Json<Vec<Stack>>, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::ListDetectedStacks { docker_host })
+        .call_on(
+            agent_id.as_deref(),
+            Request::ListDetectedStacks { docker_host },
+        )
         .await
     {
         Response::DetectedStacks(v) => Ok(Json(v)),
@@ -467,10 +535,13 @@ pub async fn list_services(
     State(state): State<AppState>,
     Path(host_id): Path<String>,
 ) -> Result<Json<Vec<SwarmService>>, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::ListSwarmServices { docker_host })
+        .call_on(
+            agent_id.as_deref(),
+            Request::ListSwarmServices { docker_host },
+        )
         .await
     {
         Response::SwarmServices(v) => Ok(Json(v)),
@@ -482,10 +553,10 @@ pub async fn list_nodes(
     State(state): State<AppState>,
     Path(host_id): Path<String>,
 ) -> Result<Json<Vec<SwarmNode>>, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::ListSwarmNodes { docker_host })
+        .call_on(agent_id.as_deref(), Request::ListSwarmNodes { docker_host })
         .await
     {
         Response::SwarmNodes(v) => Ok(Json(v)),
@@ -497,13 +568,16 @@ pub async fn list_service_tasks(
     State(state): State<AppState>,
     Path((host_id, service_id)): Path<(String, String)>,
 ) -> Result<Json<Vec<SwarmTask>>, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::ListSwarmTasks {
-            docker_host,
-            service_id,
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::ListSwarmTasks {
+                docker_host,
+                service_id,
+            },
+        )
         .await
     {
         Response::SwarmTasks(v) => Ok(Json(v)),
@@ -515,13 +589,16 @@ pub async fn update_swarm_service(
     State(state): State<AppState>,
     Path((host_id, service_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::UpdateSwarmService {
-            docker_host,
-            service_id: service_id.clone(),
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::UpdateSwarmService {
+                docker_host,
+                service_id: service_id.clone(),
+            },
+        )
         .await
     {
         Response::Ok => Ok(StatusCode::NO_CONTENT),
@@ -534,14 +611,17 @@ pub async fn scale_swarm_service(
     Path((host_id, service_id)): Path<(String, String)>,
     Query(params): Query<ScaleQuery>,
 ) -> Result<StatusCode, ApiError> {
-    let docker_host = resolve_docker_host(&state, &host_id).await?;
+    let (agent_id, docker_host) = resolve_target(&state, &host_id).await?;
     match state
         .agent
-        .call(Request::ScaleSwarmService {
-            docker_host,
-            service_id: service_id.clone(),
-            target_replicas: params.target_replicas.unwrap_or(1),
-        })
+        .call_on(
+            agent_id.as_deref(),
+            Request::ScaleSwarmService {
+                docker_host,
+                service_id: service_id.clone(),
+                target_replicas: params.target_replicas.unwrap_or(1),
+            },
+        )
         .await
     {
         Response::Ok => Ok(StatusCode::NO_CONTENT),
