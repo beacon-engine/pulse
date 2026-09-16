@@ -10,32 +10,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── 1. Rust Workspace Checks & Tests ─────────────────────────────────────────
-  rust-check:
-    name: Rust (Format, Clippy, Tests)
+  # ── 1. Go Checks & Tests ─────────────────────────────────────────────────────
+  go-check:
+    name: Go (Format, Vet, Tests)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Go toolchain
+        uses: actions/setup-go@v5
         with:
-          components: clippy, rustfmt
-
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
+          go-version: "1.26"
+          cache-dependency-path: go.sum
 
       - name: Check Code Formatting
-        run: cargo fmt --all -- --check
+        run: |
+          unformatted="$(gofmt -l cmd internal)"
+          if [ -n "$unformatted" ]; then
+            echo "❌ These files are not gofmt-formatted:"; echo "$unformatted"; exit 1
+          fi
 
-      - name: Run Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Vet
+        run: go vet ./...
 
-      # `--all-targets` covers unit tests plus the integration tests under each
-      # crate's `tests/` folder (e.g. agent/tests/*.rs).
       - name: Run Tests
-        run: cargo test --workspace --all-targets --verbose
+        run: go test ./... -count=1
 
   # ── 2. Frontend Build Check ──────────────────────────────────────────────────
   frontend-check:
@@ -64,7 +64,7 @@ jobs:
   docker-dry-run:
     name: Verify Docker Builds
     runs-on: ubuntu-latest
-    needs: [rust-check, frontend-check]
+    needs: [go-check, frontend-check]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

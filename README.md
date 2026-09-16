@@ -2,16 +2,16 @@
 
 **A lightweight, high-performance container management platform with native observability**
 
-[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
+[![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8.svg)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## What is Pulse?
 
-Pulse is a modern alternative to Portainer, built in Rust to manage Docker,
+Pulse is a modern alternative to Portainer, built in Go to manage Docker,
 Docker Swarm, and Kubernetes from one dashboard with first-class observability
 and alerting.
 
-- **Lightweight** — Rust core, no garbage collector or heavy runtime (~20 MB RSS per process; see [Benchmarks](#benchmarks))
+- **Lightweight** — small, static Go binaries (one per process; no external runtime)
 - **Split control/executor design** — a public HTTP gateway backed by an agent that owns cluster access
 - **First-class observability** — Prometheus metrics, live WebSocket events, Slack alerting
 - **API-first** — every dashboard action is a documented HTTP endpoint
@@ -20,7 +20,7 @@ and alerting.
 
 ## Architecture
 
-Pulse is three Rust crates plus a Svelte frontend:
+Pulse is two Go binaries (agent + gateway) over a shared protocol package, plus a Svelte frontend:
 
 ```
 ┌──────────┐   HTTP/JSON    ┌───────────┐   TCP (framed)    ┌─────────┐   Docker API   ┌────────┐
@@ -32,22 +32,23 @@ Pulse is three Rust crates plus a Svelte frontend:
                      (users, hosts, stacks, tokens, events)
 ```
 
-- **`gateway/`** — the frontend-facing **HTTP API**. Owns the database
-  (users, hosts, stacks, webhook tokens, events), authentication, Slack
-  alerting, the Prometheus proxy, WebSocket fan-out, and metrics. It holds **no**
-  Docker access itself — it resolves each host to a `docker_host` connection
-  string and forwards the operation to the agent.
-- **`agent/`** — a **stateless executor** (crate `pulse-core`) that owns Docker,
-  Docker Swarm, and Kubernetes access. It listens on a **binary TCP** protocol
-  (not HTTP) and answers `Request`s from the gateway with `Response`s. It keeps
-  no database.
-- **`protocol/`** — shared wire types (the `Request`/`Response` enums, domain
-  models, and length-prefixed framing) linked by both sides, so the vocabulary
-  is defined exactly once.
+- **`cmd/gateway` + `internal/gateway`** — the frontend-facing **HTTP API**. Owns
+  the database (users, hosts, stacks, webhook tokens, events), authentication,
+  Slack alerting, the Prometheus proxy, WebSocket fan-out, and metrics. It holds
+  **no** Docker access itself — it resolves each host to a `docker_host`
+  connection string and forwards the operation to the agent. Agents may also dial
+  *in* over WebSocket (push mode); see [docs/PUSH_PULL_TRANSPORT.md](docs/PUSH_PULL_TRANSPORT.md).
+- **`cmd/agent` + `internal/agent`** — a **stateless executor** that owns Docker,
+  Docker Swarm, and Kubernetes access. It answers `Request`s from the gateway
+  with `Response`s over a framed TCP protocol (pull) or an outbound WebSocket
+  (push). It keeps no database.
+- **`internal/protocol`** — shared wire types (the `Request`/`Response` union,
+  domain models, and length-prefixed / WS framing) imported by both sides, so the
+  vocabulary is defined exactly once.
 - **`frontend/`** — Svelte 5 + Vite dashboard; talks only to the gateway.
 
-> Nothing should send HTTP to the agent's TCP port — it only speaks the binary
-> gateway protocol. (A stray HTTP client there is logged and dropped.)
+> Nothing should send arbitrary HTTP to the agent's TCP port — it only speaks the
+> binary gateway protocol. (A stray HTTP client there is logged and dropped.)
 
 ---
 
@@ -73,7 +74,7 @@ Swarm and Kubernetes locally in isolation to test these integrations.
 
 ### ✅ Completed
 
-- [x] **Gateway/agent split** — HTTP control plane + TCP executor over a shared `protocol` crate
+- [x] **Gateway/agent split** — HTTP control plane + TCP executor over a shared protocol package
 - [x] **Docker** — list/inspect, start/stop/restart, recreate, env update, exec, logs
 - [x] **Images / volumes / networks** — list, delete, prune, connect/disconnect
 - [x] **Compose stacks** — saved stacks, up/down, detected stacks
@@ -127,7 +128,7 @@ To maintain Pulse's low memory footprint (~20 MB RSS) and clean gateway↔agent 
 
 **Implementation Strategy:**
 * **Task-Level Agent (Sidecar / In-Task):** The agent runs inside an ECS Task and queries the **ECS Task Metadata Endpoint v4** (`${ECS_CONTAINER_METADATA_URI_V4}/task/stats`). This endpoint provides container-level CPU, memory, network stats, and lifecycle events without requiring root or Docker socket access.
-* **Gateway Cloud Poller (Agentless):** For cluster-wide views, the Gateway uses the AWS SDK for Rust (`aws-sdk-ecs`) to poll `DescribeTasks`, `ListServices`, and CloudWatch metrics.
+* **Gateway Cloud Poller (Agentless):** For cluster-wide views, the Gateway uses the AWS SDK for Go to poll `DescribeTasks`, `ListServices`, and CloudWatch metrics.
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -149,14 +150,11 @@ To maintain Pulse's low memory footprint (~20 MB RSS) and clean gateway↔agent 
 **The Challenge:** Nomad manages non-Docker workloads (executables, Java JARs, QEMU VMs) alongside raw containers, using a job/allocation model rather than pods/deployments.
 
 **Implementation Strategy:**
-* **Nomad API Client in `pulse-core`:** Add a native Nomad HTTP client to `agent/` that interfaces with Nomad's `/v1/jobs`, `/v1/allocations`, and `/v1/nodes` REST endpoints.
-* **Protocol Enum Extension:** Extend the shared `protocol` crate with Nomad domain models:
-  ```rust
-  pub enum Request {
-      // Existing Docker/K8s commands...
-      NomadListAllocations { node_id: Option<String> },
-      NomadPromoteJob { job_id: String },
-  }
+* **Nomad API client in the agent:** Add a native Nomad HTTP client to `internal/agent` that interfaces with Nomad's `/v1/jobs`, `/v1/allocations`, and `/v1/nodes` REST endpoints.
+* **Protocol extension:** Extend the shared `internal/protocol` package with Nomad domain models:
+  ```go
+  // Existing Docker/K8s request kinds, plus:
+  // ReqNomadListAllocations, ReqNomadPromoteJob
   ```
 
 ---
@@ -165,7 +163,7 @@ To maintain Pulse's low memory footprint (~20 MB RSS) and clean gateway↔agent 
 
 ### Prerequisites
 
-- Rust 1.85+
+- Go 1.26+
 - Docker
 - Node.js 20+ (frontend)
 
@@ -173,20 +171,27 @@ To maintain Pulse's low memory footprint (~20 MB RSS) and clean gateway↔agent 
 
 ```bash
 # 1. Agent — owns Docker/Swarm/k8s, listens on TCP
-cd agent && cargo run         # tcp://localhost:9000  (BEACON_PORT)
+go run ./cmd/agent            # tcp://localhost:9000  (BEACON_PORT)
 
 # 2. Gateway — HTTP API + DB, forwards to the agent
-cd gateway && cargo run       # http://localhost:8080 (HTTP_PORT, AGENT_ADDR)
+go run ./cmd/gateway          # http://localhost:8080 (HTTP_PORT, AGENT_ADDR)
 
 # 3. Frontend
-cd frontend && npm install && npm run dev   # http://localhost:9003
+cd frontend && npm install && npm run dev   # http://localhost:9010
 ```
 
-Open **http://localhost:9003**. On first run you'll be asked to **create an admin
+Open the frontend dev URL. On first run you'll be asked to **create an admin
 account** (this is the setup step). After that, log in with those credentials.
 
-> Starting fresh: the gateway stores everything in `gateway/pulse.db`. Delete
-> that file to reset all users/hosts/stacks.
+> Starting fresh: the gateway stores everything in `pulse.db` (its working dir).
+> Delete that file to reset all users/hosts/stacks.
+
+### Build the binaries
+
+```bash
+go build ./cmd/agent      # ./agent
+go build ./cmd/gateway    # ./gateway  (serves the built frontend from STATIC_DIR)
+```
 
 ---
 
@@ -404,12 +409,13 @@ require the `admin` role.
 
 ## Switching databases
 
-The gateway's storage layer is behind a `Repository` trait. To move from SQLite
-to PostgreSQL:
+The gateway's storage layer is behind a `Repository` interface. To move from
+SQLite to PostgreSQL:
 
-1. Change `sqlx` features in `gateway/Cargo.toml`: `"sqlite"` → `"postgres"`
-2. Add `gateway/src/storage/postgres.rs` implementing `Repository`
-3. Update the one line in `gateway/src/storage.rs` that constructs the repository
+1. Add a `postgres.go` in `internal/gateway/storage` implementing `Repository`
+   (e.g. with `database/sql` + `pgx`)
+2. Update the one place in `internal/gateway/storage/storage.go` that constructs
+   the repository
 
 Nothing else changes.
 
@@ -417,10 +423,11 @@ Nothing else changes.
 
 ## Technology stack
 
-- **Backend**: Rust — Axum, Tokio, Bollard (Docker), kube-rs (Kubernetes), sqlx, prometheus, Argon2
+- **Backend**: Go — net/http, the official Docker SDK, client-go (Kubernetes),
+  coder/websocket, pure-Go SQLite (modernc), gopsutil, Argon2id
 - **Frontend**: Svelte 5, Vite, TypeScript, axios
 - **Database**: SQLite (default) / PostgreSQL
-- **Transport**: length-prefixed JSON over TCP (gateway↔agent)
+- **Transport**: length-prefixed JSON over TCP, or JSON over WebSocket (gateway↔agent)
 
 ---
 
@@ -430,4 +437,4 @@ MIT — see [LICENSE](LICENSE) for details.
 
 ---
 
-**Built with Rust**
+**Built with Go**

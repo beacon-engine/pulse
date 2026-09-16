@@ -1,0 +1,90 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pulse
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pulse-agent
+  namespace: pulse
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pulse-agent
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pulse-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pulse-agent
+subjects:
+  - kind: ServiceAccount
+    name: pulse-agent
+    namespace: pulse
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pulse-agent
+  namespace: pulse
+  labels:
+    app: pulse-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pulse-agent
+  template:
+    metadata:
+      labels:
+        app: pulse-agent
+    spec:
+      serviceAccountName: pulse-agent
+      containers:
+        - name: agent
+          image: pulse-agent:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9000
+              name: beacon
+          env:
+            - name: BEACON_MODE
+              value: "listen"
+            - name: BEACON_PORT
+              value: "9000"
+          resources:
+            requests:
+              cpu: "25m"
+              memory: "32Mi"
+            limits:
+              memory: "128Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pulse-agent
+  namespace: pulse
+spec:
+  type: NodePort # Or LoadBalancer in cloud (EKS/GKE)
+  selector:
+    app: pulse-agent
+  ports:
+    - name: beacon
+      port: 9000
+      targetPort: 9000
+      nodePort: 30900
