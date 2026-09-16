@@ -17,9 +17,9 @@ Verify: `git config --get core.hooksPath` should print `.githooks`.
 
 ## Hooks
 
-- **`pre-push`** — blocks a push unless it passes: `cargo fmt --all --check`,
-  `cargo clippy --workspace --all-targets -D warnings`, `cargo test --workspace`,
-  and the frontend build (`cd frontend && npm run build`).
+- **`pre-push`** — blocks a push unless it passes: `gofmt -l` (formatting),
+  `go vet ./...`, `go test ./...`, and the frontend build
+  (`cd frontend && npm run build`).
 
 ## Notes
 

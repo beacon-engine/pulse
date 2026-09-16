@@ -12,25 +12,25 @@ RUN --mount=type=cache,target=/root/.npm \
 COPY frontend/ ./
 RUN npm run build
 
-# ─────────────────────────────── 2. Rust Builder ─────────────────────────────
-FROM rust:1-bookworm AS rust-builder
+# ─────────────────────────────── 2. Go Builder ───────────────────────────────
+FROM golang:1.26-bookworm AS go-builder
 WORKDIR /build
 
-# Include workspace root files
-COPY Cargo.toml Cargo.lock* ./
-COPY protocol ./protocol
-COPY agent ./agent
-COPY gateway ./gateway
+# Cache modules first, then build. CGO is off so the binaries are fully static
+# (pure-Go SQLite, plus the Docker SDK and client-go) — they run on a slim base
+# with no libc surprises.
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
-# Build release binaries for both packages
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/build/target \
-    cargo build --release -p pulse-core -p gateway && \
-    cp /build/target/release/agent /build/agent-bin && \
-    cp /build/target/release/gateway /build/gateway-bin
+COPY cmd ./cmd
+COPY internal ./internal
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/agent ./cmd/agent && \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/gateway ./cmd/gateway
 
 # ─────────────────────────────── Target 1: Agent ─────────────────────────────
+# The agent shells out to `docker compose`, so the runtime needs the Docker CLI.
 FROM debian:bookworm-slim AS agent
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
@@ -43,7 +43,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
  && rm -rf /var/lib/apt/lists/*
 
-COPY --from=rust-builder /build/agent-bin /usr/local/bin/agent
+COPY --from=go-builder /out/agent /usr/local/bin/agent
 
 ENV BEACON_PORT=9000
 EXPOSE 9000
@@ -56,7 +56,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # Copy backend binary and frontend static assets
-COPY --from=rust-builder /build/gateway-bin /usr/local/bin/gateway
+COPY --from=go-builder /out/gateway /usr/local/bin/gateway
 COPY --from=frontend-builder /frontend/dist /app/dist
 
 WORKDIR /data
