@@ -68,3 +68,24 @@ ENV HTTP_PORT=8080 \
 EXPOSE 8080
 VOLUME ["/data"]
 ENTRYPOINT ["gateway"]
+
+# ─────────────────────────────── Dev (hot-reload + debug) ────────────────────
+# Used by docker-compose.dev.yml: source is bind-mounted, `air` rebuilds on save,
+# and `dlv` is available for in-container breakpoint debugging (DAP on 2345/2346).
+FROM golang:1.26-bookworm AS dev
+# Docker CLI so the agent can run `docker compose` during dev.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+ && install -m 0755 -d /etc/apt/keyrings \
+ && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
+ && chmod a+r /etc/apt/keyrings/docker.asc \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" \
+      > /etc/apt/sources.list.d/docker.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
+ && rm -rf /var/lib/apt/lists/*
+RUN go install github.com/air-verse/air@latest \
+ && go install github.com/go-delve/delve/cmd/dlv@latest
+WORKDIR /app
+# Source is bind-mounted at runtime; air + dlv are on PATH (/go/bin).
+CMD ["air", "-c", ".air.gateway.toml"]

@@ -25,7 +25,7 @@ func TestMigrationsAndCRUD(t *testing.T) {
 	base, _ := repo.CountEnvironments(ctx, "")
 
 	agent := "prod-k8s"
-	id, err := repo.CreateEnvironment(ctx, "prod", "unix:///var/run/docker.sock", &agent)
+	id, err := repo.CreateEnvironment(ctx, "prod", "unix:///var/run/docker.sock", &agent, nil)
 	if err != nil {
 		t.Fatalf("CreateEnvironment: %v", err)
 	}

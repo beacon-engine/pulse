@@ -1,0 +1,54 @@
+# Dev stack: the binaries run IN containers with your source bind-mounted, so
+# `air` rebuilds + restarts on every save. Ports 2345/2346 are exposed for
+# in-container breakpoint debugging (attach Zed after `make dev-debug-*`).
+#
+#   make dev                 # start (hot-reload)
+#   make dev-debug-gateway   # then attach Zed on :2345
+services:
+  agent:
+    build:
+      context: .
+      target: dev
+    working_dir: /app
+    command: ["air", "-c", ".air.agent.toml"]
+    environment:
+      BEACON_MODE: listen
+      BEACON_PORT: "9000"
+      HOST_ROOT: /host
+    volumes:
+      - .:/app
+      - go-mod:/go/pkg/mod
+      - go-build:/root/.cache/go-build
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /:/host:ro
+    ports:
+      - "9081:9000" # agent protocol
+      - "2346:2346" # dlv (agent)
+
+  gateway:
+    build:
+      context: .
+      target: dev
+    working_dir: /app
+    command: ["air", "-c", ".air.gateway.toml"]
+    environment:
+      HTTP_PORT: "8080"
+      AGENT_ADDR: agent:9000
+      DATABASE_URL: sqlite:///data/pulse.db
+      STATIC_DIR: /app/frontend/dist
+      PULSE_DB_RESET_ON_MISMATCH: "1"
+    volumes:
+      - .:/app
+      - go-mod:/go/pkg/mod
+      - go-build:/root/.cache/go-build
+      - pulse-dev-data:/data
+    ports:
+      - "9080:8080" # gateway API/UI
+      - "2345:2345" # dlv (gateway)
+    depends_on:
+      - agent
+
+volumes:
+  go-mod:
+  go-build:
+  pulse-dev-data:

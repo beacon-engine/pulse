@@ -47,7 +47,7 @@ type Repository interface {
 	ListEnvironmentsPage(ctx context.Context, search string, limit, offset int64) ([]protocol.Environment, error)
 	CountEnvironments(ctx context.Context, search string) (int64, error)
 	GetEnvironment(ctx context.Context, id string) (*protocol.Environment, error)
-	CreateEnvironment(ctx context.Context, name, dockerHost string, agentID *string) (string, error)
+	CreateEnvironment(ctx context.Context, name, dockerHost string, agentID, agentAddr *string) (string, error)
 	RenameEnvironment(ctx context.Context, id, name string) error
 	DeleteEnvironment(ctx context.Context, id string) error
 

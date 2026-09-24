@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -50,7 +51,7 @@ func TestAgentWSAcceptsPushSessionAndCorrelates(t *testing.T) {
 	waitRegistered(t, st, "prod", true)
 
 	id := "prod"
-	resp := st.Agent.CallOn(ctx, &id, protocol.Request{Kind: protocol.ReqPing})
+	resp := st.Agent.CallOn(ctx, &id, nil, protocol.Request{Kind: protocol.ReqPing})
 	if resp.Kind != protocol.RespKindPong {
 		t.Errorf("CallOn(prod, Ping) = %s, want Pong", resp.Kind)
 	}
@@ -88,7 +89,7 @@ func TestAgentWSDisconnectUnregisters(t *testing.T) {
 	// With the session gone, a routed call falls back to the (dead) default
 	// pull client and fails fast rather than hanging.
 	id := "prod"
-	resp := st.Agent.CallOn(ctx, &id, protocol.Request{Kind: protocol.ReqPing})
+	resp := st.Agent.CallOn(ctx, &id, nil, protocol.Request{Kind: protocol.ReqPing})
 	if resp.Kind != protocol.RespKindError {
 		t.Errorf("post-disconnect CallOn = %s, want Error (fallback)", resp.Kind)
 	}
@@ -131,4 +132,98 @@ func waitRegistered(t *testing.T, st *State, id string, present bool) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("agent %q registration != %v within timeout", id, present)
+}
+
+// Proves the architectural fix: a host with its own agent_addr routes to THAT
+// pull agent, not the default AGENT_ADDR. The default here points at a dead port,
+// so a correct route must reach the live per-host agent.
+func TestCallOnRoutesToPerHostAgentAddr(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	// A minimal pull agent that answers Ping→Pong over the framed protocol.
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				for {
+					var req protocol.Request
+					if protocol.ReadFrame(c, &req) != nil {
+						return
+					}
+					resp := protocol.RespOk()
+					if req.Kind == protocol.ReqPing {
+						resp = protocol.RespPong()
+					}
+					if protocol.WriteFrame(c, resp) != nil {
+						return
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	// Default points at a dead port; the host supplies its own agent_addr.
+	router := NewAgentRouter(NewAgentClient("127.0.0.1:1"))
+	addr := ln.Addr().String()
+
+	resp := router.CallOn(context.Background(), nil, &addr, protocol.Request{Kind: protocol.ReqPing})
+	if resp.Kind != protocol.RespKindPong {
+		t.Errorf("per-host agent_addr route = %s, want Pong (must not hit the dead default)", resp.Kind)
+	}
+
+	// No agent_addr → falls back to the dead default → transport error.
+	resp = router.CallOn(context.Background(), nil, nil, protocol.Request{Kind: protocol.ReqPing})
+	if resp.Kind != protocol.RespKindError {
+		t.Errorf("nil agent_addr should fall back to the (dead) default → Error, got %s", resp.Kind)
+	}
+}
+
+// Proves the firewall-friendly pull path: a host whose agent_addr is a ws:// URL
+// is routed over WebSocket (not raw TCP), reaching a WS-serving agent.
+func TestCallOnRoutesToWSAgent(t *testing.T) {
+	// A fake WS agent: replies Pong to each RequestFrame on any path.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		for {
+			_, data, err := c.Read(r.Context())
+			if err != nil {
+				return
+			}
+			var f protocol.RequestFrame
+			if json.Unmarshal(data, &f) != nil {
+				continue
+			}
+			resp := protocol.RespOk()
+			if f.Req.Kind == protocol.ReqPing {
+				resp = protocol.RespPong()
+			}
+			reply, _ := json.Marshal(protocol.ResponseFrame{ID: f.ID, Resp: resp})
+			if c.Write(r.Context(), websocket.MessageText, reply) != nil {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	// Bare ws://host (no path) — the router appends /agent/ws. Default is a dead
+	// TCP port, so success proves the WS transport was chosen and used.
+	wsAddr := "ws" + strings.TrimPrefix(srv.URL, "http")
+	router := NewAgentRouter(NewAgentClient("127.0.0.1:1"))
+
+	resp := router.CallOn(context.Background(), nil, &wsAddr, protocol.Request{Kind: protocol.ReqPing})
+	if resp.Kind != protocol.RespKindPong {
+		t.Errorf("ws:// agent_addr route = %s, want Pong (should use the WebSocket transport)", resp.Kind)
+	}
 }

@@ -126,7 +126,7 @@ func TestAPIK8sUnreachableAgent(t *testing.T) {
 	defer srv.Close()
 	c := authedClient(t, srv)
 
-	id, _ := st.DB.CreateEnvironment(context.Background(), "k8s", "", nil)
+	id, _ := st.DB.CreateEnvironment(context.Background(), "k8s", "", nil, nil)
 	resp, err := c.Get(srv.URL + "/api/hosts/" + id + "/k8s/pods")
 	if err != nil {
 		t.Fatalf("GET pods: %v", err)
@@ -142,7 +142,7 @@ func TestAPIStacksCRUD(t *testing.T) {
 	defer srv.Close()
 	c := authedClient(t, srv)
 
-	hostID, _ := st.DB.CreateEnvironment(context.Background(), "h", "", nil)
+	hostID, _ := st.DB.CreateEnvironment(context.Background(), "h", "", nil, nil)
 	resp, err := c.Post(srv.URL+"/api/hosts/"+hostID+"/stacks", "application/json",
 		strings.NewReader(`{"name":"web","content":"services: {}"}`))
 	if err != nil {

@@ -6,6 +6,7 @@ type CreateHostBody struct {
 	Name       string  `json:"name"`
 	DockerHost string  `json:"docker_host"`
 	AgentID    *string `json:"agent_id"`
+	AgentAddr  *string `json:"agent_addr"`
 }
 
 type RenameHostBody struct {

@@ -402,6 +402,11 @@ type ResponseFrame struct {
 // MaxFrame guards against a corrupt/hostile length prefix.
 const MaxFrame = 64 * 1024 * 1024
 
+// ErrFrameTooLarge is returned when a length prefix exceeds MaxFrame. In practice
+// this usually means a non-protocol client (an HTTP request, a k8s httpGet probe,
+// or a Docker client pointed at this port) spoke to the binary protocol port.
+var ErrFrameTooLarge = errors.New("frame exceeds maximum size")
+
 // WriteFrame writes a length-prefixed JSON frame: a big-endian uint32 length
 // followed by that many bytes of JSON.
 func WriteFrame(w io.Writer, v any) error {
@@ -410,7 +415,7 @@ func WriteFrame(w io.Writer, v any) error {
 		return err
 	}
 	if len(b) > MaxFrame {
-		return errors.New("frame exceeds maximum size")
+		return ErrFrameTooLarge
 	}
 	var lb [4]byte
 	binary.BigEndian.PutUint32(lb[:], uint32(len(b)))
@@ -430,7 +435,7 @@ func ReadFrame(r io.Reader, v any) error {
 	}
 	n := binary.BigEndian.Uint32(lb[:])
 	if int64(n) > MaxFrame {
-		return errors.New("frame exceeds maximum size")
+		return ErrFrameTooLarge
 	}
 	buf := make([]byte, n)
 	if _, err := io.ReadFull(r, buf); err != nil {

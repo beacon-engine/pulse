@@ -84,7 +84,7 @@ func (st *State) handleDeleteStack(w http.ResponseWriter, r *http.Request) {
 	// Best-effort teardown before removing the record.
 	if s, err := st.DB.GetStack(r.Context(), id); err == nil && s != nil {
 		if env, derr := st.DB.GetEnvironment(r.Context(), s.HostID); derr == nil && env != nil {
-			_ = st.Agent.CallOn(r.Context(), env.AgentID, protocol.Request{
+			_ = st.Agent.CallOn(r.Context(), env.AgentID, env.AgentAddr, protocol.Request{
 				Kind: protocol.ReqComposeDown, DockerHost: env.DockerHost, Stack: composeStack(s),
 			})
 		}
@@ -111,11 +111,11 @@ func (st *State) stackLifecycle(w http.ResponseWriter, r *http.Request, kind, ne
 	if s == nil {
 		return
 	}
-	agentID, dockerHost, ok := st.resolveTarget(w, r, s.HostID)
+	agentID, agentAddr, dockerHost, ok := st.resolveTarget(w, r, s.HostID)
 	if !ok {
 		return
 	}
-	resp := st.Agent.CallOn(r.Context(), agentID, protocol.Request{
+	resp := st.Agent.CallOn(r.Context(), agentID, agentAddr, protocol.Request{
 		Kind: kind, DockerHost: dockerHost, Stack: composeStack(s),
 	})
 	if resp.Kind != protocol.RespKindText {

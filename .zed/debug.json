@@ -1,0 +1,60 @@
+// Zed debug configurations (Delve). `dlv` must be installed (`make tools`).
+//
+// Two ways to debug:
+//   • LAUNCH (recommended) — Zed runs the binary on your Mac with breakpoints.
+//     The gateway's AGENT_ADDR points at 127.0.0.1:9000, so it talks to the
+//     agent running in `make dev` (its 9000 is published). No path mapping.
+//   • ATTACH — debug the binary INSIDE a container: `make dev` then
+//     `make dev-debug-gateway` (runs dlv-dap on :2345), then attach here.
+[
+  {
+    "label": "Launch gateway (local, talks to container agent)",
+    "adapter": "Delve",
+    "request": "launch",
+    "mode": "debug",
+    "program": "$ZED_WORKTREE_ROOT/cmd/gateway",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": {
+      "HTTP_PORT": "9080",
+      "AGENT_ADDR": "127.0.0.1:9000",
+      "DATABASE_URL": "sqlite://pulse-dev.db",
+      "STATIC_DIR": "./frontend/dist",
+      "PULSE_DB_RESET_ON_MISMATCH": "1"
+    }
+  },
+  {
+    "label": "Launch agent (local, listen)",
+    "adapter": "Delve",
+    "request": "launch",
+    "mode": "debug",
+    "program": "$ZED_WORKTREE_ROOT/cmd/agent",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": { "BEACON_MODE": "listen", "BEACON_PORT": "9000" }
+  },
+  {
+    "label": "Debug tests (current package)",
+    "adapter": "Delve",
+    "request": "launch",
+    "mode": "test",
+    "program": "$ZED_DIRNAME",
+    "cwd": "$ZED_WORKTREE_ROOT"
+  },
+  {
+    "label": "Attach: gateway in container (:2345)",
+    "adapter": "Delve",
+    "tcp_connection": { "host": "127.0.0.1", "port": 2345 },
+    "request": "launch",
+    "mode": "exec",
+    "program": "/app/tmp/gateway",
+    "cwd": "/app"
+  },
+  {
+    "label": "Attach: agent in container (:2346)",
+    "adapter": "Delve",
+    "tcp_connection": { "host": "127.0.0.1", "port": 2346 },
+    "request": "launch",
+    "mode": "exec",
+    "program": "/app/tmp/agent",
+    "cwd": "/app"
+  }
+]
