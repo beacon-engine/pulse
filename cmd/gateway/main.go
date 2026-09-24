@@ -10,16 +10,22 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/beacon-engine/pulse/internal/gateway"
 	"github.com/beacon-engine/pulse/internal/gateway/storage"
 )
 
 func main() {
-	log.Println("Starting Pulse gateway v0.1.0 (Go)")
+	log.Println("Starting Pulse gateway v0.1.0 (Go version)")
 
 	cfg := gateway.LoadConfig()
-	ctx := context.Background()
+	// Cancel on SIGINT/SIGTERM so the server and background watcher shut down
+	// cleanly on `docker stop` / a k8s rolling update.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	db, err := storage.Init(ctx, cfg.DatabaseURL, cfg.DBResetOnMismatch)
 	if err != nil {
@@ -43,19 +49,28 @@ func main() {
 	// Consume the pull agent's Docker event stream in the background.
 	go gateway.RunWatcher(ctx, st)
 
-	handler := st.Routes()
-	addr := fmt.Sprintf("0.0.0.0:%d", cfg.HTTPPort)
+	srv := &http.Server{Addr: fmt.Sprintf("0.0.0.0:%d", cfg.HTTPPort), Handler: st.Routes()}
+	tls := cfg.TLSCertPath != "" && cfg.TLSKeyPath != ""
 
-	if cfg.TLSCertPath != "" && cfg.TLSKeyPath != "" {
-		log.Printf("Pulse gateway listening on https://localhost:%d", cfg.HTTPPort)
-		if err := http.ListenAndServeTLS(addr, cfg.TLSCertPath, cfg.TLSKeyPath, handler); err != nil {
-			log.Fatalf("TLS server failed: %v", err)
+	go func() {
+		var err error
+		if tls {
+			log.Printf("Pulse gateway listening on https://localhost:%d", cfg.HTTPPort)
+			err = srv.ListenAndServeTLS(cfg.TLSCertPath, cfg.TLSKeyPath)
+		} else {
+			log.Printf("Pulse gateway listening on http://localhost:%d", cfg.HTTPPort)
+			err = srv.ListenAndServe()
 		}
-		return
-	}
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("server failed: %v", err)
+		}
+	}()
 
-	log.Printf("Pulse gateway listening on http://localhost:%d", cfg.HTTPPort)
-	if err := http.ListenAndServe(addr, handler); err != nil {
-		log.Fatalf("server failed: %v", err)
+	<-ctx.Done()
+	log.Println("Shutting down…")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("graceful shutdown: %v", err)
 	}
 }

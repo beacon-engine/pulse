@@ -6,6 +6,9 @@ package main
 import (
 	"context"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/beacon-engine/pulse/internal/agent"
 )
@@ -15,7 +18,9 @@ func main() {
 
 	cfg := agent.LoadConfig()
 	st := agent.NewState(cfg)
-	ctx := context.Background()
+	// Cancel on SIGINT/SIGTERM so the listener / uplink shut down cleanly.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	// Best-effort initial Kubernetes connect; if it fails we retry lazily per request.
 	if _, err := st.K8s.Client(); err != nil {
@@ -36,7 +41,11 @@ func main() {
 		agent.RunUplink(ctx, st, cfg.GatewayURL, cfg.GatewayToken, cfg.InsecureSkipTLSVerify)
 
 	case agent.ModeListen:
-		if err := agent.ServeTCP(ctx, st, cfg.Port); err != nil {
+		serve := agent.ServeTCP
+		if cfg.ListenTransport == "ws" {
+			serve = agent.ServeWS
+		}
+		if err := serve(ctx, st, cfg.Port); err != nil {
 			log.Fatalf("agent server failed: %v", err)
 		}
 	}

@@ -77,13 +77,13 @@ func (st *State) handleWebhookDeployContainer(w http.ResponseWriter, r *http.Req
 	if !st.verifyWebhookToken(w, r, "container", name, hostID) {
 		return
 	}
-	agentID, dockerHost, ok := st.resolveTarget(w, r, hostID)
+	agentID, agentAddr, dockerHost, ok := st.resolveTarget(w, r, hostID)
 	if !ok {
 		return
 	}
 
 	// Find the container id by name via the agent.
-	listResp := st.Agent.CallOn(r.Context(), agentID, protocol.Request{Kind: protocol.ReqListContainers, DockerHost: dockerHost})
+	listResp := st.Agent.CallOn(r.Context(), agentID, agentAddr, protocol.Request{Kind: protocol.ReqListContainers, DockerHost: dockerHost})
 	if listResp.Kind != protocol.RespKindContainers {
 		writeUnexpected(w, listResp)
 		return
@@ -103,7 +103,7 @@ func (st *State) handleWebhookDeployContainer(w http.ResponseWriter, r *http.Req
 	}
 
 	pull := boolParam(r, "pull", true)
-	resp := st.Agent.CallOn(r.Context(), agentID, protocol.Request{
+	resp := st.Agent.CallOn(r.Context(), agentID, agentAddr, protocol.Request{
 		Kind: protocol.ReqRecreateLatest, DockerHost: dockerHost, ID: targetID, Pull: pull,
 	})
 	if resp.Kind != protocol.RespKindID {
@@ -117,12 +117,12 @@ func (st *State) handleWebhookDeployContainer(w http.ResponseWriter, r *http.Req
 
 // recreate_container: legacy endpoint (id-based, no token).
 func (st *State) handleWebhookRecreateContainer(w http.ResponseWriter, r *http.Request) {
-	agentID, dockerHost, ok := st.resolveTarget(w, r, r.PathValue("host_id"))
+	agentID, agentAddr, dockerHost, ok := st.resolveTarget(w, r, r.PathValue("host_id"))
 	if !ok {
 		return
 	}
 	pull := boolParam(r, "pull", false)
-	resp := st.Agent.CallOn(r.Context(), agentID, protocol.Request{
+	resp := st.Agent.CallOn(r.Context(), agentID, agentAddr, protocol.Request{
 		Kind: protocol.ReqRecreateLatest, DockerHost: dockerHost, ID: r.PathValue("container_id"), Pull: pull,
 	})
 	if resp.Kind != protocol.RespKindID {
@@ -163,7 +163,7 @@ func (st *State) handleWebhookRedeployStack(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	agentID, dockerHost, ok := st.resolveTarget(w, r, hostID)
+	agentID, agentAddr, dockerHost, ok := st.resolveTarget(w, r, hostID)
 	if !ok {
 		return
 	}
@@ -171,7 +171,7 @@ func (st *State) handleWebhookRedeployStack(w http.ResponseWriter, r *http.Reque
 	var output string
 
 	if boolParam(r, "pull", false) {
-		pullResp := st.Agent.CallOn(r.Context(), agentID, protocol.Request{Kind: protocol.ReqComposePull, DockerHost: dockerHost, Stack: compose})
+		pullResp := st.Agent.CallOn(r.Context(), agentID, agentAddr, protocol.Request{Kind: protocol.ReqComposePull, DockerHost: dockerHost, Stack: compose})
 		output += "=== pull ===\n"
 		if pullResp.Kind == protocol.RespKindText {
 			var out string
@@ -183,7 +183,7 @@ func (st *State) handleWebhookRedeployStack(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	upResp := st.Agent.CallOn(r.Context(), agentID, protocol.Request{Kind: protocol.ReqComposeUp, DockerHost: dockerHost, Stack: compose})
+	upResp := st.Agent.CallOn(r.Context(), agentID, agentAddr, protocol.Request{Kind: protocol.ReqComposeUp, DockerHost: dockerHost, Stack: compose})
 	if upResp.Kind != protocol.RespKindText {
 		writeUnexpected(w, upResp)
 		return
@@ -203,11 +203,11 @@ func (st *State) handleWebhookUpdateSwarm(w http.ResponseWriter, r *http.Request
 	if !st.verifyWebhookToken(w, r, "swarm", serviceID, hostID) {
 		return
 	}
-	agentID, dockerHost, ok := st.resolveTarget(w, r, hostID)
+	agentID, agentAddr, dockerHost, ok := st.resolveTarget(w, r, hostID)
 	if !ok {
 		return
 	}
-	resp := st.Agent.CallOn(r.Context(), agentID, protocol.Request{Kind: protocol.ReqUpdateSwarmService, DockerHost: dockerHost, ServiceID: serviceID})
+	resp := st.Agent.CallOn(r.Context(), agentID, agentAddr, protocol.Request{Kind: protocol.ReqUpdateSwarmService, DockerHost: dockerHost, ServiceID: serviceID})
 	if resp.Kind != protocol.RespKindOk {
 		writeUnexpected(w, resp)
 		return
@@ -221,12 +221,12 @@ func (st *State) handleWebhookScaleSwarm(w http.ResponseWriter, r *http.Request)
 	if !st.verifyWebhookToken(w, r, "swarm", serviceID, hostID) {
 		return
 	}
-	agentID, dockerHost, ok := st.resolveTarget(w, r, hostID)
+	agentID, agentAddr, dockerHost, ok := st.resolveTarget(w, r, hostID)
 	if !ok {
 		return
 	}
 	replicas := uint64(clampInt(atoiDefault(r.URL.Query().Get("target_replicas"), 1), 0, 1<<20))
-	resp := st.Agent.CallOn(r.Context(), agentID, protocol.Request{
+	resp := st.Agent.CallOn(r.Context(), agentID, agentAddr, protocol.Request{
 		Kind: protocol.ReqScaleSwarmService, DockerHost: dockerHost, ServiceID: serviceID, TargetReplicas: replicas,
 	})
 	if resp.Kind != protocol.RespKindOk {
@@ -245,11 +245,11 @@ func (st *State) handleWebhookK8sRollout(w http.ResponseWriter, r *http.Request)
 	if !st.verifyWebhookToken(w, r, "k8s", namespace+"/"+deployment, hostID) {
 		return
 	}
-	agentID, _, ok := st.resolveTarget(w, r, hostID)
+	agentID, agentAddr, _, ok := st.resolveTarget(w, r, hostID)
 	if !ok {
 		return
 	}
-	resp := st.Agent.CallOn(r.Context(), agentID, protocol.Request{
+	resp := st.Agent.CallOn(r.Context(), agentID, agentAddr, protocol.Request{
 		Kind: protocol.ReqK8sRollout, Namespace: namespace, Deployment: deployment,
 	})
 	if resp.Kind != protocol.RespKindOk {

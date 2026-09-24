@@ -38,7 +38,7 @@ func (st *State) handleCreateHost(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	id, err := st.DB.CreateEnvironment(r.Context(), body.Name, body.DockerHost, body.AgentID)
+	id, err := st.DB.CreateEnvironment(r.Context(), body.Name, body.DockerHost, body.AgentID, body.AgentAddr)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

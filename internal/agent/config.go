@@ -41,6 +41,11 @@ type Config struct {
 	// HostRoot is the host filesystem root as seen from the container (HOST_ROOT,
 	// e.g. /host for `-v /:/host:ro`). Empty means bare-metal / no bind-mount.
 	HostRoot string
+	// ListenTransport selects how the agent serves in Listen (pull) mode:
+	// "tcp" (framed TCP, default) or "ws" (WebSocket over HTTP — rides 80/443,
+	// so it traverses the firewalls/proxies that block arbitrary TCP ports).
+	// From BEACON_TRANSPORT.
+	ListenTransport string
 	// InsecureSkipTLSVerify disables server-certificate verification on the
 	// wss:// uplink (PULSE_INSECURE_SKIP_TLS_VERIFY). Trusted networks only.
 	InsecureSkipTLSVerify bool
@@ -56,6 +61,16 @@ func LoadConfig() Config {
 		KubeconfigYAML:        loadKubeconfig(),
 		HostRoot:              os.Getenv("HOST_ROOT"),
 		InsecureSkipTLSVerify: truthy(os.Getenv("PULSE_INSECURE_SKIP_TLS_VERIFY")),
+		ListenTransport:       parseListenTransport(os.Getenv("BEACON_TRANSPORT")),
+	}
+}
+
+func parseListenTransport(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "ws", "wss", "websocket", "http":
+		return "ws"
+	default:
+		return "tcp"
 	}
 }
 

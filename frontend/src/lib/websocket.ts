@@ -68,7 +68,7 @@ export function connect(onEvent: (e: WsEvent) => void): () => void {
     }
   };
 
-  ws.onerror = () => console.warn('Pulse WebSocket error');
+  ws.onerror = () => console.warn('[Pulse] : WebSocket error');
 
   return () => ws.close();
 }

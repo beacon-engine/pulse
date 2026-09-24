@@ -56,17 +56,17 @@ func writeUnexpected(w http.ResponseWriter, resp protocol.Response) {
 // resolveTarget resolves a host id to (agent_id, docker_host). On failure it
 // writes the HTTP error and returns ok=false. agent_id selects the push session
 // to route to (nil → the default pull agent).
-func (st *State) resolveTarget(w http.ResponseWriter, r *http.Request, hostID string) (agentID *string, dockerHost string, ok bool) {
+func (st *State) resolveTarget(w http.ResponseWriter, r *http.Request, hostID string) (agentID, agentAddr *string, dockerHost string, ok bool) {
 	env, err := st.DB.GetEnvironment(r.Context(), hostID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
-		return nil, "", false
+		return nil, nil, "", false
 	}
 	if env == nil {
 		writeErr(w, http.StatusNotFound, "host "+hostID+" not found")
-		return nil, "", false
+		return nil, nil, "", false
 	}
-	return env.AgentID, env.DockerHost, true
+	return env.AgentID, env.AgentAddr, env.DockerHost, true
 }
 
 // pageBounds parses ?page & ?per_page with sane bounds (page ≥ 1, per_page 1..500).
@@ -118,11 +118,11 @@ func paginate[T any](items []T, page, perPage int) Page[T] {
 // response kind decodes the payload into out (nil to ignore). It writes the HTTP
 // error itself and returns false on any failure, so callers just write success.
 func (st *State) proxy(w http.ResponseWriter, r *http.Request, hostID string, buildReq func(dockerHost string) protocol.Request, wantKind string, out any) bool {
-	agentID, dockerHost, ok := st.resolveTarget(w, r, hostID)
+	agentID, agentAddr, dockerHost, ok := st.resolveTarget(w, r, hostID)
 	if !ok {
 		return false
 	}
-	resp := st.Agent.CallOn(r.Context(), agentID, buildReq(dockerHost))
+	resp := st.Agent.CallOn(r.Context(), agentID, agentAddr, buildReq(dockerHost))
 	if resp.Kind != wantKind {
 		writeUnexpected(w, resp)
 		return false

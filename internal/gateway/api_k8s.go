@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/beacon-engine/pulse/internal/protocol"
@@ -10,11 +11,13 @@ import (
 // that represents that host's cluster.
 
 func (st *State) handleK8sPods(w http.ResponseWriter, r *http.Request) {
-	agentID, _, ok := st.resolveTarget(w, r, r.PathValue("id"))
+	agentID, agentAddr, _, ok := st.resolveTarget(w, r, r.PathValue("id"))
+	log.Println(agentID, agentAddr, ok)
 	if !ok {
 		return
 	}
-	resp := st.Agent.CallOn(r.Context(), agentID, protocol.Request{Kind: protocol.ReqK8sPods})
+	resp := st.Agent.CallOn(r.Context(), agentID, agentAddr, protocol.Request{Kind: protocol.ReqK8sPods})
+	log.Println(resp)
 	if resp.Kind != protocol.RespKindPods {
 		writeUnexpected(w, resp)
 		return
@@ -28,11 +31,12 @@ func (st *State) handleK8sPods(w http.ResponseWriter, r *http.Request) {
 }
 
 func (st *State) handleK8sNamespaces(w http.ResponseWriter, r *http.Request) {
-	agentID, _, ok := st.resolveTarget(w, r, r.PathValue("id"))
+	agentID, agentAddr, _, ok := st.resolveTarget(w, r, r.PathValue("id"))
 	if !ok {
 		return
 	}
-	resp := st.Agent.CallOn(r.Context(), agentID, protocol.Request{Kind: protocol.ReqK8sNamespaces})
+	resp := st.Agent.CallOn(r.Context(), agentID, agentAddr, protocol.Request{Kind: protocol.ReqK8sNamespaces})
+	log.Println(resp)
 	if resp.Kind != protocol.RespKindNamespaces {
 		writeUnexpected(w, resp)
 		return
@@ -46,11 +50,11 @@ func (st *State) handleK8sNamespaces(w http.ResponseWriter, r *http.Request) {
 }
 
 func (st *State) handleK8sDeletePod(w http.ResponseWriter, r *http.Request) {
-	agentID, _, ok := st.resolveTarget(w, r, r.PathValue("id"))
+	agentID, agentAddr, _, ok := st.resolveTarget(w, r, r.PathValue("id"))
 	if !ok {
 		return
 	}
-	resp := st.Agent.CallOn(r.Context(), agentID, protocol.Request{
+	resp := st.Agent.CallOn(r.Context(), agentID, agentAddr, protocol.Request{
 		Kind:      protocol.ReqK8sDeletePod,
 		Namespace: r.PathValue("namespace"),
 		Name:      r.PathValue("name"),

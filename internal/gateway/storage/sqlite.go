@@ -68,9 +68,11 @@ func (r *SqliteRepository) GetRecentEvents(ctx context.Context, limit int64) ([]
 
 // ── Environments (hosts) ─────────────────────────────────────────────────────
 
+const envCols = `id, name, docker_host, is_local, created_at, agent_id, agent_addr`
+
 func (r *SqliteRepository) ListEnvironmentsPage(ctx context.Context, search string, limit, offset int64) ([]protocol.Environment, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, name, docker_host, is_local, created_at, agent_id FROM environments
+		`SELECT `+envCols+` FROM environments
 		 WHERE name LIKE ?
 		 ORDER BY is_local DESC, created_at ASC
 		 LIMIT ? OFFSET ?`,
@@ -100,7 +102,7 @@ func (r *SqliteRepository) CountEnvironments(ctx context.Context, search string)
 
 func (r *SqliteRepository) GetEnvironment(ctx context.Context, id string) (*protocol.Environment, error) {
 	row := r.db.QueryRowContext(ctx,
-		`SELECT id, name, docker_host, is_local, created_at, agent_id FROM environments WHERE id = ?`, id)
+		`SELECT `+envCols+` FROM environments WHERE id = ?`, id)
 	env, err := scanEnv(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -111,11 +113,11 @@ func (r *SqliteRepository) GetEnvironment(ctx context.Context, id string) (*prot
 	return &env, nil
 }
 
-func (r *SqliteRepository) CreateEnvironment(ctx context.Context, name, dockerHost string, agentID *string) (string, error) {
+func (r *SqliteRepository) CreateEnvironment(ctx context.Context, name, dockerHost string, agentID, agentAddr *string) (string, error) {
 	id := newID()
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO environments (id, name, docker_host, is_local, agent_id) VALUES (?, ?, ?, 0, ?)`,
-		id, name, dockerHost, ptrArg(agentID))
+		`INSERT INTO environments (id, name, docker_host, is_local, agent_id, agent_addr) VALUES (?, ?, ?, 0, ?, ?)`,
+		id, name, dockerHost, ptrArg(agentID), ptrArg(agentAddr))
 	return id, err
 }
 
@@ -339,13 +341,14 @@ type scanner interface {
 func scanEnv(s scanner) (protocol.Environment, error) {
 	var e protocol.Environment
 	var isLocal int64
-	var agentID sql.NullString
-	err := s.Scan(&e.ID, &e.Name, &e.DockerHost, &isLocal, &e.CreatedAt, &agentID)
+	var agentID, agentAddr sql.NullString
+	err := s.Scan(&e.ID, &e.Name, &e.DockerHost, &isLocal, &e.CreatedAt, &agentID, &agentAddr)
 	if err != nil {
 		return e, err
 	}
 	e.IsLocal = isLocal != 0
 	e.AgentID = nsToPtr(agentID)
+	e.AgentAddr = nsToPtr(agentAddr)
 	return e, nil
 }
 

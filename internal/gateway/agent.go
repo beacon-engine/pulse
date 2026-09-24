@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"log"
 	"net"
+	"net/url"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -36,16 +38,23 @@ type AgentRouter struct {
 	def      *AgentClient
 	mu       sync.RWMutex
 	sessions map[string]AgentTransport
+	pulls    map[string]AgentTransport
 }
 
 func NewAgentRouter(def *AgentClient) *AgentRouter {
-	return &AgentRouter{def: def, sessions: make(map[string]AgentTransport)}
+	return &AgentRouter{
+		def:      def,
+		sessions: make(map[string]AgentTransport),
+		pulls:    make(map[string]AgentTransport),
+	}
 }
 
-// CallOn prefers the named agent's live push session, falling back to the default
-// pull client. agentID comes from the target host's record once host→agent
-// association lands; today it is usually nil.
-func (r *AgentRouter) CallOn(ctx context.Context, agentID *string, req protocol.Request) protocol.Response {
+// CallOn routes a request to the agent that serves a host, in priority order:
+//  1. the host's live push session (by agentID), if connected;
+//  2. the host's own pull agent at agentAddr, if set (each address gets a cached
+//     client — the gateway can talk to many agents, not just one);
+//  3. the default pull agent (AGENT_ADDR) as a fallback / seed.
+func (r *AgentRouter) CallOn(ctx context.Context, agentID, agentAddr *string, req protocol.Request) protocol.Response {
 	if agentID != nil {
 		r.mu.RLock()
 		session, ok := r.sessions[*agentID]
@@ -54,7 +63,55 @@ func (r *AgentRouter) CallOn(ctx context.Context, agentID *string, req protocol.
 			return session.Call(ctx, req)
 		}
 	}
+	if agentAddr != nil && strings.TrimSpace(*agentAddr) != "" {
+		return r.transportFor(*agentAddr).Call(ctx, req)
+	}
 	return r.def.Call(ctx, req)
+}
+
+// transportFor returns a cached transport for a per-host agent endpoint, chosen
+// by scheme: ws://|wss:// → a WebSocket pull client (rides HTTP(S), so it
+// traverses firewalls/proxies — same rationale as push); anything else (bare
+// host:port or tcp://…) → the raw framed-TCP client. Mirrors how the agent pools
+// Docker clients per docker_host.
+func (r *AgentRouter) transportFor(addr string) AgentTransport {
+	key := strings.TrimSpace(addr)
+	r.mu.RLock()
+	t, ok := r.pulls[key]
+	r.mu.RUnlock()
+	if ok {
+		return t
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if t, ok := r.pulls[key]; ok {
+		return t
+	}
+	if isWSAddr(key) {
+		t = &wsAgentClient{url: wsURL(key)}
+	} else {
+		t = NewAgentClient(strings.TrimPrefix(key, "tcp://"))
+	}
+	r.pulls[key] = t
+	return t
+}
+
+func isWSAddr(addr string) bool {
+	a := strings.ToLower(strings.TrimSpace(addr))
+	return strings.HasPrefix(a, "ws://") || strings.HasPrefix(a, "wss://")
+}
+
+// wsURL ensures the endpoint has the agent's WS path. A bare ws://host:port
+// gets /agent/ws appended; an explicit path is left as-is.
+func wsURL(addr string) string {
+	u, err := url.Parse(strings.TrimSpace(addr))
+	if err != nil {
+		return addr
+	}
+	if u.Path == "" || u.Path == "/" {
+		u.Path = "/agent/ws"
+	}
+	return u.String()
 }
 
 // WatchEvents opens the default agent's event stream (used by the watcher).
@@ -115,6 +172,44 @@ func (c *AgentClient) Call(ctx context.Context, req protocol.Request) protocol.R
 		return protocol.RespError(502, "agent unreachable: "+err.Error())
 	}
 	return resp
+}
+
+// wsAgentClient is a pull transport that reaches the agent over WebSocket
+// (ws://|wss://). Like AgentClient it is per-call: dial, send one RequestFrame,
+// read the ResponseFrame, close. Rides HTTP(S), so it traverses firewalls/proxies
+// that block raw TCP. TLS ("wss") verification uses the system roots.
+type wsAgentClient struct {
+	url string
+}
+
+func (c *wsAgentClient) Call(ctx context.Context, req protocol.Request) protocol.Response {
+	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(dialCtx, c.url, nil)
+	if err != nil {
+		return protocol.RespError(502, "agent unreachable: "+err.Error())
+	}
+	defer conn.CloseNow()
+	conn.SetReadLimit(protocol.MaxFrame)
+
+	out, err := json.Marshal(protocol.RequestFrame{ID: 1, Req: req})
+	if err != nil {
+		return protocol.RespError(500, err.Error())
+	}
+	if err := conn.Write(ctx, websocket.MessageText, out); err != nil {
+		return protocol.RespError(502, "agent unreachable: "+err.Error())
+	}
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		return protocol.RespError(502, "agent unreachable: "+err.Error())
+	}
+	var frame protocol.ResponseFrame
+	if err := json.Unmarshal(data, &frame); err != nil {
+		return protocol.RespError(502, "malformed agent response")
+	}
+	conn.Close(websocket.StatusNormalClosure, "")
+	return frame.Resp
 }
 
 // WatchEvents opens an event-stream connection; the caller reads Response::Event

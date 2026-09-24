@@ -10,6 +10,10 @@ type Environment struct {
 	// AgentID is the push agent that represents this environment; nil routes to
 	// the default pull agent. See the gateway's AgentRouter.
 	AgentID *string `json:"agent_id"`
+	// AgentAddr is a per-host pull agent endpoint (host:port). When set, the
+	// gateway dials this agent for this environment instead of the default
+	// AGENT_ADDR. nil uses the default.
+	AgentAddr *string `json:"agent_addr"`
 }
 
 type SavedStack struct {

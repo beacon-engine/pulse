@@ -1,0 +1,18 @@
+{
+  "languages": {
+    "Go": {
+      "format_on_save": "on",
+      "code_actions_on_format": {
+        "source.organizeImports": true
+      }
+    }
+  },
+  "lsp": {
+    "gopls": {
+      "initialization_options": {
+        "usePlaceholders": true,
+        "staticcheck": true
+      }
+    }
+  }
+}
