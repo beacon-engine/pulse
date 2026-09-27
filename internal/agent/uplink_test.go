@@ -49,7 +49,7 @@ func TestUplinkServesPushSession(t *testing.T) {
 
 	url := "ws" + strings.TrimPrefix(srv.URL, "http")
 	st := NewState(Config{Mode: ModeDial})
-	go dialAndServe(context.Background(), st, url, "s3cret", false)
+	go dialAndServe(context.Background(), st, Config{GatewayURL: url, GatewayToken: "s3cret"})
 
 	select {
 	case auth := <-gotAuth:

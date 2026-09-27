@@ -171,7 +171,7 @@ To maintain Pulse's low memory footprint (~20 MB RSS) and clean gateway↔agent 
 
 ```bash
 # 1. Agent — owns Docker/Swarm/k8s, listens on TCP
-go run ./cmd/agent            # tcp://localhost:9000  (BEACON_PORT)
+go run ./cmd/agent            # tcp://localhost:9000  (PULSE_PORT)
 
 # 2. Gateway — HTTP API + DB, forwards to the agent
 go run ./cmd/gateway          # http://localhost:8080 (HTTP_PORT, AGENT_ADDR)
@@ -215,20 +215,87 @@ Testing Pulse against multi-node environments locally requires distinct network 
 
 ## Environment variables
 
-**Gateway**
+Pulse aims to run with almost no configuration. New variables use the `PULSE_`
+prefix; the older `BEACON_*` names still work as **deprecated aliases** — when a
+`PULSE_*` var is unset the agent reads its `BEACON_*` equivalent and logs a
+one-time warning. Prefer the `PULSE_*` names.
+
+The agent-liveness *tunables* (offline threshold, alert grace, retention) are
+**not** env vars — they live in the gateway database and are editable at runtime
+via `PUT /api/settings`. See [Auto-registration & liveness](#auto-registration--liveness).
+
+### Gateway
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `HTTP_PORT` | `8080` | HTTP port the dashboard/API is served on |
-| `AGENT_ADDR` | `127.0.0.1:9000` | TCP address of the agent |
-| `DATABASE_URL` | `sqlite://pulse.db` | SQLite path (or Postgres URL) |
-| `SLACK_WEBHOOK_URL` | — | Slack incoming webhook for alerts |
+| `HTTP_PORT` | `8080` | Port the dashboard + API + `/agent/ws` are served on. |
+| `AGENT_ADDR` | `127.0.0.1:9000` | Default **pull** agent address (`host:port`), used when an environment has no push session or per-host `agent_addr`. |
+| `DATABASE_URL` | `sqlite://pulse.db` | Database URL: `sqlite://<path>` or `sqlite::memory:`. |
+| `STATIC_DIR` | `./frontend/dist` | Built SPA directory to serve. |
+| `SLACK_WEBHOOK_URL` | — | Slack incoming webhook for lifecycle + agent-down alerts. |
+| `PULSE_AGENT_TOKENS` | — | Comma-separated `agent_id:token` pairs authenticating **push** agents on `/agent/ws`, e.g. `prod:s3cret,staging:h0nk`. Empty disables push. A token may be shared by many duplicated agents — each still registers as its **own** environment (see below). |
+| `PULSE_TLS_CERT` / `PULSE_TLS_KEY` | — | PEM cert/key. When **both** are set the gateway serves HTTPS/WSS natively; otherwise plain HTTP behind a TLS-terminating proxy. |
+| `PULSE_DB_RESET_ON_MISMATCH` | `false` | Dev only: recreate the DB on a migration mismatch instead of aborting. **Destroys all data.** |
 
-**Agent**
+### Agent
+
+Point it at the gateway and give it the token — it self-registers on connect.
+There is **no identity env var to set**: the agent generates a unique instance id
+per process at boot.
+
+| Variable | Default | Description | Legacy alias |
+|----------|---------|-------------|--------------|
+| `PULSE_MODE` | `listen` | `dial`/`push` (agent dials out over WSS — required for auto-register) or `listen`/`pull` (agent binds a socket; the gateway dials in). | `BEACON_MODE` |
+| `PULSE_GATEWAY_WS_URL` | — | Gateway WS URL to dial in `dial` mode, e.g. `wss://gateway.example.com/agent/ws`. Required for `dial`. | — |
+| `PULSE_TOKEN` | — | Bearer token presented on the WS upgrade (must match a `PULSE_AGENT_TOKENS` entry). | `BEACON_TOKEN` |
+| `PULSE_PORT` | `9000` | TCP port to listen on in `listen` mode. | `BEACON_PORT` |
+| `PULSE_TRANSPORT` | `tcp` | `listen`-mode transport: `tcp` (framed TCP) or `ws` (WebSocket over HTTP, rides 80/443). | `BEACON_TRANSPORT` |
+| `PULSE_INSECURE_SKIP_TLS_VERIFY` | `false` | Skip server-cert verification on the `wss://` uplink. Trusted networks / dev only. | — |
+| `HOST_ROOT` | — | Host filesystem root as seen from the container (e.g. `/host` for `-v /:/host:ro`) so host disk/mem metrics reflect the real host. Empty = bare-metal. | — |
+| `PULSE_KUBECONFIG_PATH` | — | Path to a kubeconfig file to read. | `BEACON_KUBECONFIG_PATH` |
+| `PULSE_KUBECONFIG` | — | Inline kubeconfig YAML (ignored if `…_PATH` is set). | `BEACON_KUBECONFIG` |
+
+**Agent — auto-registration (all optional):**
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BEACON_PORT` | `9000` | TCP port the agent listens on |
+| `PULSE_AUTO_REGISTER` | `on` | Self-register as an environment on connect (`dial` mode). Set `off` for the legacy static path where an admin pre-creates the environment and links it by `agent_id`. |
+| `PULSE_ENV_NAME` | hostname | Display name to register the environment under. |
+| `PULSE_DOCKER_HOST` | `unix:///var/run/docker.sock` | Local Docker endpoint the registered environment points at. |
+| `PULSE_HEARTBEAT_INTERVAL` | `30s` | How often the agent calls home. Go duration (`45s`, `2m`) or bare seconds (`30`); floored at `5s`. |
+
+### Auto-registration & liveness
+
+When a `dial`-mode agent connects with `PULSE_AUTO_REGISTER` on (the default), it
+**self-registers** as an environment — no manual `POST /api/hosts`, no per-agent
+config. This is what makes autoscaled fleets (ECS, Karpenter, Terraform-managed
+duplicates) appear in the dashboard on their own.
+
+How it stays correct:
+
+- **Identity.** Each agent process generates a random instance id at boot. Its
+  environment is keyed by `<token_id>:<instance_id>`, so duplicated agents sharing
+  one `PULSE_AGENT_TOKENS` entry each appear as their **own** environment, and a
+  reconnect/restart *upserts* the same row instead of duplicating it.
+- **Heartbeat.** The agent calls home every `PULSE_HEARTBEAT_INTERVAL`; a
+  missed-heartbeat backstop marks an environment offline even if the socket
+  half-opens without a clean close.
+- **Scale-down vs. outage.** On a clean shutdown (SIGTERM — how ECS/K8s/Karpenter
+  stop a task) the agent sends a *deregister* first, so it goes offline
+  **silently**. An abrupt drop with no deregister alerts (Slack, if configured)
+  after a short grace window — so real outages notify but rolling replacements
+  stay quiet.
+- **Retention.** Offline auto-registered environments are kept as history, then
+  hard-deleted once the retention window elapses.
+
+The three windows are **gateway settings** (DB-backed, editable at runtime via
+`GET`/`PUT /api/settings`; a settings page is planned) — not env vars:
+
+| Setting key | Default | Meaning |
+|-------------|---------|---------|
+| `agent_offline_threshold_seconds` | `90` | No heartbeat for this long → mark offline. |
+| `agent_alert_grace_seconds` | `60` | Wait this long after an abrupt disconnect before alerting. |
+| `agent_retention_hours` | `6` | Delete an environment after it has been offline this long. |
 
 ---
 
@@ -340,7 +407,7 @@ Today the gateway↔agent TCP link is **unencrypted**. The planned design:
 - On first boot each side generates a long-lived keypair (persisted).
 - The **first handshake** exchanges public keys and pins them (Trust On First
   Use), authenticated by a **one-time pairing token** shared via config —
-  `BEACON_PAIRING_TOKEN` — so no man-in-the-middle can slip in during that first
+  `PULSE_PAIRING_TOKEN` — so no man-in-the-middle can slip in during that first
   connection.
 - Every session then derives a fresh symmetric key (ephemeral ECDH) for forward
   secrecy.
@@ -354,7 +421,7 @@ secrecy, and mutual authentication without the weight of full TLS/PKI.
 
 | Variable | Where | Description |
 |----------|-------|-------------|
-| `BEACON_PAIRING_TOKEN` | agent + gateway | One-time shared secret that authenticates the first handshake. The agent prints it on first boot; paste it into the gateway config. |
+| `PULSE_PAIRING_TOKEN` | agent + gateway | One-time shared secret that authenticates the first handshake. The agent prints it on first boot; paste it into the gateway config. |
 
 ---
 

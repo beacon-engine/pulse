@@ -49,6 +49,9 @@ func main() {
 	// Consume the pull agent's Docker event stream in the background.
 	go gateway.RunWatcher(ctx, st)
 
+	// Enforce the auto-registered agent liveness lifecycle (offline/alert/retention).
+	go gateway.RunAgentSweeper(ctx, st)
+
 	srv := &http.Server{Addr: fmt.Sprintf("0.0.0.0:%d", cfg.HTTPPort), Handler: st.Routes()}
 	tls := cfg.TLSCertPath != "" && cfg.TLSKeyPath != ""
 

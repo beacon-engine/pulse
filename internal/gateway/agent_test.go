@@ -12,6 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/beacon-engine/pulse/internal/gateway/storage"
 	"github.com/beacon-engine/pulse/internal/protocol"
 )
 
@@ -92,6 +93,63 @@ func TestAgentWSDisconnectUnregisters(t *testing.T) {
 	resp := st.Agent.CallOn(ctx, &id, nil, protocol.Request{Kind: protocol.ReqPing})
 	if resp.Kind != protocol.RespKindError {
 		t.Errorf("post-disconnect CallOn = %s, want Error (fallback)", resp.Kind)
+	}
+}
+
+// An agent that declares an instance id on the upgrade is auto-registered as an
+// environment keyed by "<token_id>:<instance>", and marked offline when its
+// session drops.
+func TestAgentWSAutoRegisters(t *testing.T) {
+	ctx := context.Background()
+	repo, err := storage.Init(ctx, "sqlite::memory:", false)
+	if err != nil {
+		t.Fatalf("storage init: %v", err)
+	}
+	st := &State{
+		Agent:       NewAgentRouter(NewAgentClient("127.0.0.1:1")),
+		AgentTokens: map[string]string{"s3cret": "prod"},
+		Events:      NewHub(),
+		DB:          repo,
+	}
+	srv := httptest.NewServer(http.HandlerFunc(st.AgentWSHandler))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	c, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Authorization":       {"Bearer s3cret"},
+			"X-Pulse-Instance":    {"inst-1"},
+			"X-Pulse-Name":        {"web-1"},
+			"X-Pulse-Docker-Host": {"unix:///var/run/docker.sock"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+
+	// Registers under the composite identity, not just the token id.
+	waitRegistered(t, st, "prod:inst-1", true)
+
+	envs, _ := st.DB.ListEnvironmentsPage(ctx, "web-1", 10, 0)
+	if len(envs) != 1 || envs[0].Source != "auto" || envs[0].Status != "online" {
+		t.Fatalf("auto env not created correctly: %+v", envs)
+	}
+	envID := envs[0].ID
+
+	// Abrupt disconnect → session gone and the environment marked offline.
+	c.CloseNow()
+	waitRegistered(t, st, "prod:inst-1", false)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		e, _ := st.DB.GetEnvironment(ctx, envID)
+		if e != nil && e.Status == "offline" && e.OfflineSince != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("env not marked offline after disconnect: %+v", e)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
