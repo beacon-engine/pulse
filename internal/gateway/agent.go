@@ -312,8 +312,12 @@ func sessionError(msg string) protocol.Response {
 }
 
 // runSession drives one push session for its lifetime: registers the transport,
-// pumps requests out and replies/events in, and cleans up on disconnect.
-func runSession(ctx context.Context, socket *websocket.Conn, st *State, agentID string) {
+// pumps requests out and replies/events in, and cleans up on disconnect. When
+// auto is set the agent self-registered an environment (id == agentID): its
+// heartbeats keep that row alive and, on disconnect, the row is marked offline —
+// gracefully if the agent sent a deregister first (a clean shutdown / scale-down)
+// so no down alert fires.
+func runSession(ctx context.Context, socket *websocket.Conn, st *State, agentID string, auto bool) {
 	p := newPending()
 	outbound := make(chan protocol.RequestFrame, 64)
 	done := make(chan struct{})
@@ -339,7 +343,10 @@ func runSession(ctx context.Context, socket *websocket.Conn, st *State, agentID 
 		}
 	}()
 
-	// Reader: route replies to their waiters, pushed events to the watcher.
+	// Reader: route replies to their waiters, and handle pushes on EventStreamID
+	// — Docker events (to the watcher), liveness heartbeats, and the deregister
+	// notice. graceful is only touched by this loop and read after it, so no lock.
+	graceful := false
 	for {
 		typ, data, err := socket.Read(ctx)
 		if err != nil {
@@ -354,15 +361,29 @@ func runSession(ctx context.Context, socket *websocket.Conn, st *State, agentID 
 			continue
 		}
 		if frame.ID == protocol.EventStreamID {
-			st.handleEvent(ctx, frame.Resp)
+			switch frame.Resp.Kind {
+			case protocol.RespKindHeartbeat:
+				if auto {
+					_ = st.DB.TouchEnvironment(ctx, agentID)
+				}
+			case protocol.RespKindDeregister:
+				graceful = true
+			default:
+				st.handleEvent(ctx, frame.Resp)
+			}
 		} else {
 			p.complete(frame.ID, frame.Resp)
 		}
 	}
 
-	// Teardown: stop routing to this agent and unblock any pending calls.
+	// Teardown: stop routing to this agent and unblock any pending calls. For an
+	// auto-registered agent, mark its environment offline (a detached context, so
+	// the write survives the cancelled session). graceful → no alert.
 	st.Agent.Unregister(agentID)
 	close(done)
 	p.failAll()
-	log.Printf("Agent '%s' disconnected", agentID)
+	if auto {
+		_ = st.DB.MarkEnvironmentOffline(context.WithoutCancel(ctx), agentID, graceful)
+	}
+	log.Printf("Agent '%s' disconnected (graceful=%t)", agentID, graceful)
 }

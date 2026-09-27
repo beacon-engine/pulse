@@ -51,6 +51,20 @@ type Repository interface {
 	RenameEnvironment(ctx context.Context, id, name string) error
 	DeleteEnvironment(ctx context.Context, id string) error
 
+	// Auto-registered environment lifecycle (self-registering dial-in agents).
+	UpsertAutoEnvironment(ctx context.Context, agentKey, name, dockerHost string) (string, error)
+	TouchEnvironment(ctx context.Context, agentKey string) error
+	MarkEnvironmentOffline(ctx context.Context, agentKey string, graceful bool) error
+	MarkStaleOffline(ctx context.Context, thresholdSeconds int) error
+	ListEnvironmentsPendingAlert(ctx context.Context, graceSeconds int) ([]protocol.Environment, error)
+	MarkEnvironmentAlerted(ctx context.Context, id string) error
+	DeleteExpiredEnvironments(ctx context.Context, retentionSeconds int) (int64, error)
+
+	// Runtime-tunable settings (DB-backed).
+	GetSetting(ctx context.Context, key string) (*string, error)
+	SetSetting(ctx context.Context, key, value string) error
+	ListSettings(ctx context.Context) (map[string]string, error)
+
 	ListStacks(ctx context.Context, hostID string) ([]protocol.SavedStack, error)
 	GetStack(ctx context.Context, id string) (*protocol.SavedStack, error)
 	CreateStack(ctx context.Context, hostID, name, content string) (string, error)

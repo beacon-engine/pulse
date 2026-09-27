@@ -38,7 +38,8 @@ func ServeWS(ctx context.Context, st *State, port uint16) error {
 		}
 		defer c.CloseNow()
 		c.SetReadLimit(protocol.MaxFrame)
-		_ = serve(r.Context(), st, c)
+		// Pull mode: the gateway drives; no self-registration/heartbeat here.
+		_ = serve(r.Context(), st, c, Config{})
 	})
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("OK"))

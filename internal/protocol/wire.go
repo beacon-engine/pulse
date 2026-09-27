@@ -282,11 +282,22 @@ const (
 	RespKindNamespaces        = "Namespaces"
 	RespKindEvent             = "Event"
 	RespKindError             = "Error"
+	// RespKindHeartbeat is an agent->gateway liveness ping pushed on
+	// EventStreamID (push sessions only). The gateway bumps the environment's
+	// last_seen; it is never a reply to a request.
+	RespKindHeartbeat = "Heartbeat"
+	// RespKindDeregister is an agent->gateway notice, pushed on EventStreamID
+	// just before a clean shutdown (SIGTERM / scale-down), that the agent is
+	// going away on purpose. The gateway marks the environment offline
+	// *gracefully* so no "agent down" alert fires.
+	RespKindDeregister = "Deregister"
 )
 
 // Response constructors (Resp* to avoid clashing with the data type names).
 func RespOk() Response                               { return Response{Kind: RespKindOk} }
 func RespPong() Response                             { return Response{Kind: RespKindPong} }
+func RespHeartbeat() Response                        { return Response{Kind: RespKindHeartbeat} }
+func RespDeregister() Response                       { return Response{Kind: RespKindDeregister} }
 func RespContainers(v []ContainerInfo) Response      { return Response{RespKindContainers, v} }
 func RespContainerDetail(v ContainerDetail) Response { return Response{RespKindContainerDetail, v} }
 func RespRaw(v json.RawMessage) Response             { return Response{RespKindRaw, v} }

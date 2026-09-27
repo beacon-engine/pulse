@@ -32,13 +32,18 @@ func main() {
 	switch cfg.Mode {
 	case agent.ModeDial:
 		if cfg.GatewayURL == "" {
-			log.Fatal("BEACON_MODE=dial requires PULSE_GATEWAY_WS_URL")
+			log.Fatal("PULSE_MODE=dial requires PULSE_GATEWAY_WS_URL")
 		}
 		if cfg.GatewayToken == "" {
-			log.Println("warning: BEACON_TOKEN is unset — the gateway will reject the session unless it allows unauthenticated agents")
+			log.Println("warning: PULSE_TOKEN is unset — the gateway will reject the session unless it allows unauthenticated agents")
 		}
-		log.Printf("Pulse agent dialing gateway at %s (push mode)", cfg.GatewayURL)
-		agent.RunUplink(ctx, st, cfg.GatewayURL, cfg.GatewayToken, cfg.InsecureSkipTLSVerify)
+		if cfg.AutoRegister {
+			log.Printf("Pulse agent dialing gateway at %s (push mode; auto-register as %q, instance %s)",
+				cfg.GatewayURL, cfg.EnvName, cfg.InstanceID)
+		} else {
+			log.Printf("Pulse agent dialing gateway at %s (push mode; auto-register disabled)", cfg.GatewayURL)
+		}
+		agent.RunUplink(ctx, st, cfg)
 
 	case agent.ModeListen:
 		serve := agent.ServeTCP

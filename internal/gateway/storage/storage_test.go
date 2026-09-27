@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func tempRepo(t *testing.T) Repository {
@@ -89,6 +90,131 @@ func TestMigrationsAndCRUD(t *testing.T) {
 	// Missing lookups return (nil, nil).
 	if got, err := repo.GetEnvironment(ctx, "nope"); err != nil || got != nil {
 		t.Errorf("missing env = %v, %v; want nil, nil", got, err)
+	}
+}
+
+// Exercises the auto-registered environment lifecycle: idempotent upsert
+// (restart/reconnect can't duplicate), offline marking, alert eligibility, revive
+// on reconnect, and retention deletion.
+func TestAutoEnvironmentLifecycle(t *testing.T) {
+	ctx := context.Background()
+	repo := tempRepo(t)
+
+	const key = "prod:inst-1"
+	id1, err := repo.UpsertAutoEnvironment(ctx, key, "web-1", "unix:///var/run/docker.sock")
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	// Idempotent: same identity upserts the SAME row (a restart / reconnect),
+	// updating the name rather than creating a duplicate.
+	id2, err := repo.UpsertAutoEnvironment(ctx, key, "web-1-renamed", "unix:///var/run/docker.sock")
+	if err != nil {
+		t.Fatalf("upsert 2: %v", err)
+	}
+	if id1 != id2 {
+		t.Fatalf("upsert not idempotent: %s != %s", id1, id2)
+	}
+	env, _ := repo.GetEnvironment(ctx, id1)
+	if env == nil || env.Source != "auto" || env.Status != "online" || env.Name != "web-1-renamed" {
+		t.Fatalf("unexpected env after upsert: %+v", env)
+	}
+
+	// Abrupt disconnect → offline with offline_since; alert-eligible.
+	if err := repo.MarkEnvironmentOffline(ctx, key, false); err != nil {
+		t.Fatalf("offline: %v", err)
+	}
+	env, _ = repo.GetEnvironment(ctx, id1)
+	if env.Status != "offline" || env.OfflineSince == nil {
+		t.Fatalf("expected offline w/ offline_since: %+v", env)
+	}
+	pending, err := repo.ListEnvironmentsPendingAlert(ctx, 0)
+	if err != nil {
+		t.Fatalf("pending: %v", err)
+	}
+	if len(pending) != 1 || pending[0].ID != id1 {
+		t.Fatalf("expected 1 pending alert, got %+v", pending)
+	}
+	// Once alerted, it doesn't re-fire.
+	if err := repo.MarkEnvironmentAlerted(ctx, id1); err != nil {
+		t.Fatalf("alerted: %v", err)
+	}
+	if p, _ := repo.ListEnvironmentsPendingAlert(ctx, 0); len(p) != 0 {
+		t.Fatalf("expected no pending after alerted, got %+v", p)
+	}
+
+	// Reconnect revives: online again, offline_since cleared, alert reset.
+	if _, err := repo.UpsertAutoEnvironment(ctx, key, "web-1", "unix:///var/run/docker.sock"); err != nil {
+		t.Fatalf("revive: %v", err)
+	}
+	env, _ = repo.GetEnvironment(ctx, id1)
+	if env.Status != "online" || env.OfflineSince != nil {
+		t.Fatalf("expected revived online: %+v", env)
+	}
+
+	// Graceful disconnect (scale-down) → offline but NOT alert-eligible.
+	if err := repo.MarkEnvironmentOffline(ctx, key, true); err != nil {
+		t.Fatalf("graceful offline: %v", err)
+	}
+	if p, _ := repo.ListEnvironmentsPendingAlert(ctx, 0); len(p) != 0 {
+		t.Fatalf("graceful disconnect should not alert, got %+v", p)
+	}
+
+	// Retention: after the offline window elapses, the row is hard-deleted.
+	// offline_since has second precision, so sleep past a clean 2s boundary to
+	// avoid an equal-timestamp (non-strict) comparison.
+	time.Sleep(2100 * time.Millisecond)
+	n, err := repo.DeleteExpiredEnvironments(ctx, 0)
+	if err != nil {
+		t.Fatalf("delete expired: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 deleted, got %d", n)
+	}
+	if got, _ := repo.GetEnvironment(ctx, id1); got != nil {
+		t.Fatalf("expected env gone, got %+v", got)
+	}
+}
+
+// Manual environments (the API path / seeded Local host) must never be touched by
+// the auto lifecycle sweeps.
+func TestManualEnvironmentUntouchedByLifecycle(t *testing.T) {
+	ctx := context.Background()
+	repo := tempRepo(t)
+
+	id, err := repo.CreateEnvironment(ctx, "manual-host", "unix:///var/run/docker.sock", nil, nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := repo.MarkStaleOffline(ctx, 0); err != nil {
+		t.Fatalf("mark stale: %v", err)
+	}
+	if _, err := repo.DeleteExpiredEnvironments(ctx, 0); err != nil {
+		t.Fatalf("delete expired: %v", err)
+	}
+	env, _ := repo.GetEnvironment(ctx, id)
+	if env == nil || env.Source != "manual" || env.Status != "online" {
+		t.Fatalf("manual env should be untouched: %+v", env)
+	}
+}
+
+func TestSettingsDefaultsAndUpdate(t *testing.T) {
+	ctx := context.Background()
+	repo := tempRepo(t)
+
+	all, err := repo.ListSettings(ctx)
+	if err != nil {
+		t.Fatalf("list settings: %v", err)
+	}
+	if all["agent_retention_hours"] != "6" {
+		t.Fatalf("expected seeded retention default 6, got %q", all["agent_retention_hours"])
+	}
+	if err := repo.SetSetting(ctx, "agent_retention_hours", "12"); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	v, _ := repo.GetSetting(ctx, "agent_retention_hours")
+	if v == nil || *v != "12" {
+		t.Fatalf("expected 12 after update, got %v", v)
 	}
 }
 

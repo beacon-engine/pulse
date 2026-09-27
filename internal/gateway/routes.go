@@ -63,6 +63,10 @@ func (st *State) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/agents", st.handleListAgents)
 	mux.HandleFunc("GET /api/events", st.handleListEvents)
 
+	// ── Settings (GET: any authed user; PUT: admin) ───────────────────────────────
+	mux.HandleFunc("GET /api/settings", st.handleGetSettings)
+	mux.HandleFunc("PUT /api/settings", st.handleUpdateSettings)
+
 	// ── Hosts (environments) ────────────────────────────────────────────────────
 	mux.HandleFunc("GET /api/hosts", st.handleListHosts)
 	mux.HandleFunc("POST /api/hosts", st.handleCreateHost)

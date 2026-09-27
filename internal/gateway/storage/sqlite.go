@@ -19,6 +19,13 @@ type SqliteRepository struct {
 func newID() string      { return uuid.NewString() }
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }
 
+// rfc3339Ago returns the RFC3339 UTC timestamp `seconds` in the past. Because
+// last_seen/offline_since are stored in this same fixed UTC format, a lexical
+// string comparison against it is a valid time comparison.
+func rfc3339Ago(seconds int) string {
+	return time.Now().UTC().Add(-time.Duration(seconds) * time.Second).Format(time.RFC3339)
+}
+
 // ptrArg turns a *string into a NULL-or-value SQL argument.
 func ptrArg(p *string) any {
 	if p == nil {
@@ -68,7 +75,7 @@ func (r *SqliteRepository) GetRecentEvents(ctx context.Context, limit int64) ([]
 
 // ── Environments (hosts) ─────────────────────────────────────────────────────
 
-const envCols = `id, name, docker_host, is_local, created_at, agent_id, agent_addr`
+const envCols = `id, name, docker_host, is_local, created_at, agent_id, agent_addr, source, status, last_seen, offline_since`
 
 func (r *SqliteRepository) ListEnvironmentsPage(ctx context.Context, search string, limit, offset int64) ([]protocol.Environment, error) {
 	rows, err := r.db.QueryContext(ctx,
@@ -129,6 +136,160 @@ func (r *SqliteRepository) RenameEnvironment(ctx context.Context, id, name strin
 func (r *SqliteRepository) DeleteEnvironment(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, "DELETE FROM environments WHERE id = ?", id)
 	return err
+}
+
+// ── Auto-registered environments (liveness lifecycle) ─────────────────────────
+
+// UpsertAutoEnvironment records (or revives) a self-registered environment keyed
+// by agentKey ("<token_id>:<instance_uuid>"). It is idempotent: a restart or a
+// reconnect updates the existing row — name/docker_host and a fresh online state
+// — instead of creating a duplicate. Returns the row id.
+func (r *SqliteRepository) UpsertAutoEnvironment(ctx context.Context, agentKey, name, dockerHost string) (string, error) {
+	now := nowRFC3339()
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO environments
+		     (id, name, docker_host, is_local, agent_id, source, status, last_seen, offline_since, graceful, alerted)
+		 VALUES (?, ?, ?, 0, ?, 'auto', 'online', ?, NULL, 0, 0)
+		 ON CONFLICT(agent_id) WHERE source = 'auto' DO UPDATE SET
+		     name          = excluded.name,
+		     docker_host   = excluded.docker_host,
+		     status        = 'online',
+		     last_seen     = excluded.last_seen,
+		     offline_since = NULL,
+		     graceful      = 0,
+		     alerted       = 0`,
+		newID(), name, dockerHost, agentKey, now)
+	if err != nil {
+		return "", err
+	}
+	var id string
+	err = r.db.QueryRowContext(ctx,
+		"SELECT id FROM environments WHERE agent_id = ? AND source = 'auto'", agentKey).Scan(&id)
+	return id, err
+}
+
+// TouchEnvironment bumps last_seen (and revives to online) for an auto row on a
+// heartbeat. No-op if the row is gone.
+func (r *SqliteRepository) TouchEnvironment(ctx context.Context, agentKey string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE environments
+		 SET last_seen = ?, status = 'online', offline_since = NULL
+		 WHERE agent_id = ? AND source = 'auto'`,
+		nowRFC3339(), agentKey)
+	return err
+}
+
+// MarkEnvironmentOffline flags an auto row offline when its session drops.
+// graceful=true (clean SIGTERM deregister) suppresses the down alert.
+func (r *SqliteRepository) MarkEnvironmentOffline(ctx context.Context, agentKey string, graceful bool) error {
+	g := 0
+	if graceful {
+		g = 1
+	}
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE environments
+		 SET status = 'offline', offline_since = ?, graceful = ?
+		 WHERE agent_id = ? AND source = 'auto' AND status = 'online'`,
+		nowRFC3339(), g, agentKey)
+	return err
+}
+
+// MarkStaleOffline flips auto rows offline when their last heartbeat is older
+// than thresholdSeconds — the backstop for a half-open connection whose read
+// loop hasn't noticed the drop yet. These are abrupt (graceful stays 0), so they
+// remain alert-eligible.
+func (r *SqliteRepository) MarkStaleOffline(ctx context.Context, thresholdSeconds int) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE environments
+		 SET status = 'offline', offline_since = ?
+		 WHERE source = 'auto' AND status = 'online'
+		   AND (last_seen IS NULL OR last_seen < ?)`,
+		nowRFC3339(), rfc3339Ago(thresholdSeconds))
+	return err
+}
+
+// ListEnvironmentsPendingAlert returns auto rows that went offline abruptly
+// (graceful=0), haven't been alerted yet, and have been offline for at least
+// graceSeconds (the debounce for fast rolling replacements).
+func (r *SqliteRepository) ListEnvironmentsPendingAlert(ctx context.Context, graceSeconds int) ([]protocol.Environment, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+envCols+` FROM environments
+		 WHERE source = 'auto' AND status = 'offline' AND graceful = 0 AND alerted = 0
+		   AND offline_since IS NOT NULL AND offline_since <= ?`,
+		rfc3339Ago(graceSeconds))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []protocol.Environment
+	for rows.Next() {
+		env, err := scanEnv(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, env)
+	}
+	return out, rows.Err()
+}
+
+// MarkEnvironmentAlerted records that a down alert has fired, so it fires once
+// per offline episode.
+func (r *SqliteRepository) MarkEnvironmentAlerted(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, "UPDATE environments SET alerted = 1 WHERE id = ?", id)
+	return err
+}
+
+// DeleteExpiredEnvironments hard-deletes auto rows that have been offline longer
+// than retentionSeconds. Returns how many were removed.
+func (r *SqliteRepository) DeleteExpiredEnvironments(ctx context.Context, retentionSeconds int) (int64, error) {
+	res, err := r.db.ExecContext(ctx,
+		`DELETE FROM environments
+		 WHERE source = 'auto' AND status = 'offline'
+		   AND offline_since IS NOT NULL AND offline_since < ?`,
+		rfc3339Ago(retentionSeconds))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// ── Settings (runtime-tunable, DB-backed) ────────────────────────────────────
+
+func (r *SqliteRepository) GetSetting(ctx context.Context, key string) (*string, error) {
+	var v string
+	err := r.db.QueryRowContext(ctx, "SELECT value FROM settings WHERE key = ?", key).Scan(&v)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r *SqliteRepository) SetSetting(ctx context.Context, key, value string) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO settings (key, value) VALUES (?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		key, value)
+	return err
+}
+
+func (r *SqliteRepository) ListSettings(ctx context.Context) (map[string]string, error) {
+	rows, err := r.db.QueryContext(ctx, "SELECT key, value FROM settings")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		out[k] = v
+	}
+	return out, rows.Err()
 }
 
 // ── Stacks ───────────────────────────────────────────────────────────────────
@@ -341,14 +502,17 @@ type scanner interface {
 func scanEnv(s scanner) (protocol.Environment, error) {
 	var e protocol.Environment
 	var isLocal int64
-	var agentID, agentAddr sql.NullString
-	err := s.Scan(&e.ID, &e.Name, &e.DockerHost, &isLocal, &e.CreatedAt, &agentID, &agentAddr)
+	var agentID, agentAddr, lastSeen, offlineSince sql.NullString
+	err := s.Scan(&e.ID, &e.Name, &e.DockerHost, &isLocal, &e.CreatedAt, &agentID, &agentAddr,
+		&e.Source, &e.Status, &lastSeen, &offlineSince)
 	if err != nil {
 		return e, err
 	}
 	e.IsLocal = isLocal != 0
 	e.AgentID = nsToPtr(agentID)
 	e.AgentAddr = nsToPtr(agentAddr)
+	e.LastSeen = nsToPtr(lastSeen)
+	e.OfflineSince = nsToPtr(offlineSince)
 	return e, nil
 }
 
