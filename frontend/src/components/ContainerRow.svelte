@@ -45,7 +45,11 @@
   <td>
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="name-cell" onclick={() => oninspect(container.id)}>
-      <div class="row-name">{container.name}</div>
+      <div class="row-name">
+        {container.name}
+        {#if container.protected}<span class="pulse-tag" title={container.protected_reason}>Pulse</span>{/if}
+        {#if container.kubernetes}<span class="pulse-tag k8s-tag" title={`Managed by Kubernetes: pod ${container.kubernetes.namespace}/${container.kubernetes.pod}`}>k8s</span>{/if}
+      </div>
       <div class="row-sub">{container.image}</div>
     </div>
   </td>
@@ -74,7 +78,7 @@
   <td>
     <div class="row-actions">
       {#if isRunning}
-        <button class="act-btn danger" title="Stop" disabled={busy}
+        <button class="act-btn danger" title={container.protected ? `Protected: ${container.protected_reason}` : 'Stop'} disabled={busy || container.protected}
           onclick={() => act(() => onstop(container.id))}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
         </button>
@@ -84,7 +88,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l14 8-14 8V4z"/></svg>
         </button>
       {/if}
-      <button class="act-btn" title="Restart" disabled={busy}
+      <button class="act-btn" title={container.protected ? `Protected: ${container.protected_reason}` : 'Restart'} disabled={busy || container.protected}
         onclick={() => act(() => onrestart(container.id))}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/></svg>
       </button>
@@ -128,4 +132,10 @@
   .act-btn:disabled { opacity: .3; cursor: not-allowed; }
   .act-btn.danger:hover:not(:disabled) { background: var(--red-tint);   color: var(--red);   border-color: var(--red); }
   .act-btn.go:hover:not(:disabled)     { background: var(--green-tint); color: var(--green); border-color: var(--green); }
+  .pulse-tag {
+    margin-left: 6px; font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--accent-ink, #4338ca); background: var(--accent-tint, #eef2ff); padding: 1px 6px; border-radius: 20px;
+    vertical-align: 1px;
+  }
+  .k8s-tag { color: var(--blue, #1d4ed8); background: var(--blue-tint, #dbeafe); }
 </style>

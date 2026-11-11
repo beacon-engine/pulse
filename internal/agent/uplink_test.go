@@ -72,3 +72,72 @@ func TestUplinkServesPushSession(t *testing.T) {
 		t.Fatal("no reply over push session")
 	}
 }
+
+// On shutdown (SIGTERM in k8s/ECS) the agent must get its Deregister onto the
+// wire before the socket closes, so a redeploy isn't reported as an outage.
+// Reading with the shutdown context used to close the socket first.
+func TestUplinkDeregistersOnShutdown(t *testing.T) {
+	connected := make(chan struct{})
+	got := make(chan string, 4)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		// Round-trip a Ping so we know the agent is serving (handshake done)
+		// before the test triggers shutdown.
+		ping, _ := json.Marshal(protocol.RequestFrame{ID: 1, Req: protocol.Request{Kind: protocol.ReqPing}})
+		if c.Write(r.Context(), websocket.MessageText, ping) != nil {
+			return
+		}
+		if _, _, err := c.Read(r.Context()); err != nil {
+			return
+		}
+		close(connected)
+		for {
+			_, data, err := c.Read(r.Context())
+			if err != nil {
+				return
+			}
+			var rf protocol.ResponseFrame
+			if json.Unmarshal(data, &rf) == nil {
+				got <- rf.Resp.Kind
+			}
+		}
+	}))
+	defer srv.Close()
+
+	ctx, shutdown := context.WithCancel(context.Background())
+	cfg := Config{
+		GatewayURL:        "ws" + strings.TrimPrefix(srv.URL, "http"),
+		AutoRegister:      true,
+		InstanceID:        "i-1",
+		HeartbeatInterval: time.Hour,
+	}
+	done := make(chan struct{})
+	st := NewState(Config{Mode: ModeDial, InstanceID: cfg.InstanceID})
+	go func() { _ = dialAndServe(ctx, st, cfg); close(done) }()
+
+	select {
+	case <-connected:
+	case <-time.After(3 * time.Second):
+		t.Fatal("agent never connected")
+	}
+	shutdown()
+
+	select {
+	case kind := <-got:
+		if kind != protocol.RespKindDeregister {
+			t.Errorf("first frame after shutdown = %s, want Deregister", kind)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("gateway never received Deregister on shutdown")
+	}
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("uplink did not exit after shutdown")
+	}
+}

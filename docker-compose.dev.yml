@@ -11,9 +11,12 @@ services:
       target: dev
     working_dir: /app
     command: ["air", "-c", ".air.agent.toml"]
+    # Marks Pulse's own containers: the agent refuses to stop/replace them.
+    labels:
+      pulse/role: agent
     environment:
-      BEACON_MODE: listen
-      BEACON_PORT: "9000"
+      PULSE_MODE: listen
+      PULSE_PORT: "9000"
       HOST_ROOT: /host
     volumes:
       - .:/app
@@ -31,12 +34,16 @@ services:
       target: dev
     working_dir: /app
     command: ["air", "-c", ".air.gateway.toml"]
+    labels:
+      pulse/role: gateway
     environment:
       HTTP_PORT: "8080"
       AGENT_ADDR: agent:9000
       DATABASE_URL: sqlite:///data/pulse.db
       STATIC_DIR: /app/frontend/dist
       PULSE_DB_RESET_ON_MISMATCH: "1"
+      # Push agents allowed to connect ("<name>:<secret>"); set in .env.
+      PULSE_AGENT_TOKENS: ${PULSE_AGENT_TOKENS:-}
     volumes:
       - .:/app
       - go-mod:/go/pkg/mod

@@ -9,6 +9,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege: jobs only need to read the repo.
+permissions:
+  contents: read
+
 jobs:
   # ── 1. Go Checks & Tests ─────────────────────────────────────────────────────
   go-check:

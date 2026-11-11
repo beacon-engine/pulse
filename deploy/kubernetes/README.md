@@ -1,84 +1,140 @@
-# Running the Pulse agent in Kubernetes (push mode)
+# Running the Pulse agent in Kubernetes
 
-In **push (dial) mode** the agent opens an outbound WebSocket to the gateway and
-serves every request over that one session. The cluster needs only egress to the
-gateway — no inbound ports, no ingress for the agent. This is the firewall-friendly
-default; see `docs/PUSH_PULL_TRANSPORT.md` for the full design.
+One agent per cluster gives Pulse a **Kubernetes** environment. In it you can see
+workloads, pods, and their containers, read each container's logs, scale and
+restart workloads, and delete pods.
 
-Kubernetes credentials come from the pod's **ServiceAccount** (in-pod RBAC): the
-agent's `K8sTarget::Auto` path calls `Client::try_default()`, which reads the
-mounted ServiceAccount token. No kubeconfig required.
+| Manifest | Mode | When to use |
+|---|---|---|
+| `agent-push.yaml` | **Push** (agent dials the gateway) | Default. The cluster needs only outbound access to the gateway; no ingress, no open ports. |
+| `agent-pull.yaml` | Pull (gateway dials the agent) | The gateway can reach into the cluster but the cluster can't reach the gateway. |
 
-## 1. Gateway side
+The agent authenticates to the Kubernetes API with its own **ServiceAccount**
+(the RBAC in the manifest). No kubeconfig is needed. Its environment keeps the
+same identity across restarts: it is derived from the cluster
+(`k8s-<kube-system namespace UID>`), so a redeploy reuses the existing
+environment in Pulse.
 
-The gateway must (a) accept the agent's token and (b) be reachable from the cluster.
+## Push mode, step by step
 
-- Set `PULSE_AGENT_TOKENS` to `<agent_id>:<token>` pairs (comma-separated). The
-  gateway maps `token -> agent_id` and registers the pushed session under that id.
-  Example: `PULSE_AGENT_TOKENS=prod-k8s:s3cret-value`.
-- The `<token>` half must equal the agent's `BEACON_TOKEN` (the Secret below).
-- Expose the gateway's `/agent/ws` endpoint to the cluster:
-  - **Plaintext, in-cluster:** if the gateway also runs in the cluster, dial
-    `ws://<gateway-service>.<ns>.svc.cluster.local:8080/agent/ws`.
-  - **TLS:** put the gateway behind an ingress/LB terminating TLS (or set
-    `PULSE_TLS_CERT`/`PULSE_TLS_KEY` for native rustls) and dial `wss://host/agent/ws`.
+### 1. Give the gateway a token for the agent
 
-## 2. Agent side
-
-1. Build & publish the agent image (`docker build --target agent -t <registry>/pulse-agent .`
-   and push, or `kind load` / `minikube image load` for local clusters).
-2. In `agent-push.yaml` replace:
-   - `image:` → your image reference,
-   - `REPLACE_ME_AGENT_TOKEN` → the token half of the gateway pair,
-   - `PULSE_GATEWAY_WS_URL` → your `ws://…`/`wss://…` endpoint.
-3. Apply:
-   ```bash
-   kubectl apply -f deploy/kubernetes/agent-push.yaml
-   ```
-
-## 3. Verify
+The gateway accepts agents whose token appears in `PULSE_AGENT_TOKENS`
+(`<name>:<token>` pairs, comma-separated). The name is only a label, and the
+environment shows up as `<name>:<cluster identity>`.
 
 ```bash
-kubectl -n pulse logs deploy/pulse-agent -f
-# expect: "Pulse agent dialing gateway at <url> (push mode)"
-#         "Uplink connected to gateway <url>"
-#         "Kubernetes connected"   (or "…will retry on demand")
+TOKEN=$(openssl rand -hex 32)
+echo "PULSE_AGENT_TOKENS=k8s:$TOKEN" >> .env   # next to docker-compose.yml
+docker compose up -d                              # the gateway reads tokens at startup
 ```
-On the gateway you should see `Agent '<agent_id>' connected (push session)`, and
-`GET /api/agents` should list `<agent_id>`. Pods/namespaces for that host will then
-resolve through the pushed session.
 
-If you see `Uplink connect … failed` looping: the URL/DNS is wrong or egress is
-blocked. If the gateway logs `invalid or missing agent token`: the `BEACON_TOKEN`
-Secret doesn't match a `PULSE_AGENT_TOKENS` entry. For a self-signed gateway cert,
-uncomment `PULSE_INSECURE_SKIP_TLS_VERIFY=1` in the Deployment.
+### 2. Store the same token in the cluster
 
-## RBAC granted
+```bash
+kubectl create namespace pulse
+kubectl -n pulse create secret generic pulse-agent-token --from-literal=token="$TOKEN"
+```
 
-Cluster-wide, matching exactly what `agent/src/kubernetes.rs` calls:
+The manifest deliberately doesn't contain this Secret, so re-applying it never
+resets your token.
 
-| Resource (apiGroup)      | Verbs                | Used by            |
-|--------------------------|----------------------|--------------------|
-| `pods` (core)            | get, list, delete    | list/delete pods   |
-| `namespaces` (core)      | get, list            | list namespaces    |
-| `deployments` (apps)     | get, list, patch     | rollout restart    |
+### 3. Point the manifest at your gateway and apply it
 
-`pods`/`namespaces` use cluster-wide `list`, so this must be a **ClusterRole**. To
-scope the agent to one namespace, swap the ClusterRole/Binding for a namespaced
-Role/RoleBinding and use `Api::default_namespaced` in the agent (larger change).
+Edit three values in `agent-push.yaml`:
 
-## Alternative: explicit kubeconfig instead of in-pod RBAC
+| Field | Set it to |
+|---|---|
+| `image` | `beaconengine/pulse-agent:sha-<commit>` (pinned), or a local image (below) |
+| `PULSE_GATEWAY_WS_URL` | The URL the **cluster** uses to reach the gateway's `/agent/ws` (examples below) |
+| `PULSE_ENV_NAME` | The environment's name in Pulse, e.g. `prod-eks` |
 
-To point the agent at a *different* cluster (or a specific context) rather than the
-one it runs in, skip the ServiceAccount RBAC and mount a kubeconfig:
+| Where the gateway runs | `PULSE_GATEWAY_WS_URL` |
+|---|---|
+| Docker Compose on your machine, cluster in OrbStack / Docker Desktop | `ws://host.docker.internal:9080/agent/ws` |
+| In the same cluster | `ws://pulse-gateway.<ns>.svc.cluster.local:8080/agent/ws` |
+| Behind TLS (ingress / load balancer) | `wss://pulse.example.com/agent/ws` |
+
+```bash
+kubectl apply -f deploy/kubernetes/agent-push.yaml
+```
+
+### 4. Check it connected
+
+```bash
+kubectl -n pulse logs deploy/pulse-agent
+#   Kubernetes connected
+#   Pulse agent dialing gateway at ws://… (push mode; auto-register as "prod-eks", identity k8s-…)
+#   Uplink connected to gateway ws://…
+```
+
+The environment appears under **Hosts** and in the environment selector. The
+**Kubernetes** page lights up when you select it. The Docker-only pages are
+hidden, because the agent reports that it has Kubernetes but no container
+runtime.
+
+| Symptom | Cause |
+|---|---|
+| `Uplink connect … failed`, repeating | Wrong URL/DNS, or the cluster can't reach the gateway |
+| Gateway logs `invalid or missing agent token` | The Secret doesn't match a `PULSE_AGENT_TOKENS` entry, or the gateway wasn't restarted after adding it |
+| Kubernetes page: *"isn't allowed to do this"* | The ClusterRole is older than the agent; re-apply the manifest |
+| Self-signed gateway certificate | Uncomment `PULSE_INSECURE_SKIP_TLS_VERIFY` (trusted networks only) |
+
+### Local clusters: using an image you built
+
+OrbStack and Docker Desktop run Kubernetes on the same Docker engine, so a
+locally built image is already available to the cluster:
+
+```bash
+docker compose build agent
+docker tag pulse-agent:latest pulse-agent:local
+# in agent-push.yaml: image: pulse-agent:local, imagePullPolicy: IfNotPresent
+```
+
+For **kind**, run `kind load docker-image pulse-agent:local`. For **minikube**,
+run `minikube image load pulse-agent:local`.
+
+## Pull mode
+
+`agent-pull.yaml` runs the agent as a TCP server on port 9000 behind a
+`ClusterIP` Service, with a NetworkPolicy that admits only that port. Expose it
+to the gateway (a `LoadBalancer`/`NodePort`, or `kubectl port-forward` for a
+quick test). Then add it in Pulse: **Hosts → Add environment → Pulse agent**,
+with the address `host:port`.
+
+Pull agents don't authenticate the gateway yet (see
+`docs/AGENT_ENROLLMENT.md`), so never expose port 9000 beyond networks you
+trust. Prefer push mode.
+
+## What the agent may do (RBAC)
+
+Cluster-wide, exactly what the Kubernetes page uses:
+
+| Resource (apiGroup) | Verbs | Used for |
+|---|---|---|
+| `pods` (core) | get, list, delete | Pods table; delete (the controller recreates it) |
+| `pods/log` (core) | get | Container logs |
+| `namespaces` (core) | get, list | Namespace list and filter |
+| `deployments`, `statefulsets`, `daemonsets` (apps) | get, list, patch | Workloads table; scale (`spec.replicas`); rolling restart |
+
+It **cannot** read Secrets or ConfigMaps, exec into pods, or create anything.
+The agent also refuses to scale, restart or delete its own pods, or any
+workload labelled `pulse/role` or `pulse/protected=true`, because that would
+cut off the connection Pulse manages the cluster through.
+
+Pods and namespaces are listed cluster-wide, so this must be a ClusterRole.
+Limiting the agent to one namespace needs a Role/RoleBinding plus agent
+changes; that isn't supported yet.
+
+## Alternative: a kubeconfig instead of the ServiceAccount
+
+To manage a *different* cluster from the one the agent runs in, mount a
+kubeconfig:
 
 ```yaml
-# Secret with the kubeconfig YAML:
-#   kubectl -n pulse create secret generic pulse-kubeconfig \
-#     --from-file=kubeconfig=$HOME/.kube/config
-# Then in the Deployment container:
+# kubectl -n pulse create secret generic pulse-kubeconfig --from-file=kubeconfig=$HOME/.kube/config
 env:
-  - name: BEACON_KUBECONFIG_PATH
+  - name: PULSE_KUBECONFIG_PATH
     value: /etc/pulse/kubeconfig
 volumeMounts:
   - name: kubeconfig
@@ -89,6 +145,23 @@ volumes:
     secret:
       secretName: pulse-kubeconfig
 ```
-`BEACON_KUBECONFIG_PATH` (a file) takes precedence; the inline `BEACON_KUBECONFIG`
-YAML is the fallback. A non-blank kubeconfig selects `K8sTarget::CustomYaml`;
-otherwise the agent falls back to in-pod auto-discovery.
+
+`PULSE_KUBECONFIG_PATH` (a file) wins over `PULSE_KUBECONFIG` (inline YAML).
+With neither, the agent uses its ServiceAccount, and outside a pod it falls back
+to `~/.kube/config`.
+
+## Try it with demo workloads
+
+`examples/demo-workloads.yaml` creates a `pulse-demo` namespace with something
+to look at:
+
+- a 3-replica Deployment
+- a two-container Deployment, for per-container logs
+- a StatefulSet
+- a DaemonSet
+- a Deployment that crash-loops on purpose
+
+```bash
+kubectl apply -f deploy/kubernetes/examples/demo-workloads.yaml
+kubectl delete namespace pulse-demo   # clean up
+```

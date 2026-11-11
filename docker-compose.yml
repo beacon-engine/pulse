@@ -4,6 +4,9 @@ services:
       context: .
       target: agent
     image: pulse-agent
+    # Marks Pulse's own containers: the agent refuses to stop/replace them.
+    labels:
+      pulse/role: agent
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /:/host:ro
@@ -17,6 +20,8 @@ services:
       context: .
       target: gateway
     image: pulse-gateway
+    labels:
+      pulse/role: gateway
     ports:
       - "9080:8080" # Unified port: serves both HTTP API and Web UI
     environment:
@@ -25,6 +30,10 @@ services:
       STATIC_DIR: /app/dist
       DATABASE_URL: sqlite:///data/pulse.db
       PULSE_TELEMETRY_ENABLED: false
+      # Push agents allowed to connect, as "<name>:<secret>" pairs. The agent
+      # holds only the secret (PULSE_TOKEN); the gateway files it under <name>.
+      # Set in .env (gitignored). Empty = push disabled.
+      PULSE_AGENT_TOKENS: ${PULSE_AGENT_TOKENS:-}
     volumes:
       - pulse-data:/data
     depends_on:

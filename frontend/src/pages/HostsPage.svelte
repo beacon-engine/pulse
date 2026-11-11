@@ -6,7 +6,7 @@
   import { navigate } from '../lib/router';
   import Pagination from '../components/Pagination.svelte';
   import AddEnvironmentModal from '../components/AddEnvironmentModal.svelte';
-  import type { Environment } from '../types/environments';
+  import { RUNTIME_LABEL, type Environment } from '../types/environments';
 
   const PER_PAGE = 20;
 
@@ -25,6 +25,8 @@
       const p = await api.listHosts({ page, perPage: PER_PAGE, search });
       hosts = p.items;
       total = p.total;
+      // Probe each listed environment so the table shows what it actually runs.
+      for (const h of hosts) void hostsStore.probe(h.id);
     } catch (e: any) {
       error = e?.response?.data ?? String(e);
       toast.error(error);
@@ -51,6 +53,12 @@
   function gotoPage(p: number) {
     page = p;
     load();
+  }
+
+  function connection(h: Environment): string {
+    if (h.agent_id) return `push agent · ${h.agent_id.split(':')[0]}`;
+    if (h.agent_addr) return `agent · ${h.agent_addr}`;
+    return h.docker_host ? `default agent → ${h.docker_host}` : 'default agent';
   }
 
   async function select(host: Environment) {
@@ -105,7 +113,8 @@
     <div class="table">
       <div class="thead">
         <div>Host</div>
-        <div>Docker endpoint</div>
+        <div>Connection</div>
+        <div>Runtimes</div>
         <div>Added</div>
         <div class="ta-r">Actions</div>
       </div>
@@ -117,9 +126,23 @@
               {h.name}
             </button>
             {#if h.is_local}<span class="tag">local</span>{/if}
+            {#if h.status === 'offline'}<span class="tag">offline</span>{/if}
             {#if hostsStore.activeHostId === h.id}<span class="tag active-tag">active</span>{/if}
           </div>
-          <div class="mono muted sm truncate">{h.docker_host}</div>
+          <div class="mono muted sm truncate" title={connection(h)}>{connection(h)}</div>
+          <div class="runtimes">
+            {#if hostsStore.capabilities[h.id] === undefined}
+              <span class="muted sm">checking…</span>
+            {:else if !hostsStore.capabilities[h.id].reachable}
+              <span class="rt rt-bad" title={hostsStore.capabilities[h.id].error}>unreachable</span>
+            {:else if hostsStore.capabilities[h.id].runtimes.length === 0}
+              <span class="rt rt-bad">none</span>
+            {:else}
+              {#each hostsStore.capabilities[h.id].runtimes as r}
+                <span class="rt" title={r.version}>{RUNTIME_LABEL[r.kind] ?? r.kind}</span>
+              {/each}
+            {/if}
+          </div>
           <div class="muted sm">{h.created_at ? new Date(h.created_at).toLocaleDateString() : '—'}</div>
           <div class="ta-r">
             <button class="btn-ghost" onclick={() => select(h)}>Select</button>
@@ -162,7 +185,7 @@
   .btn-primary :global(svg) { width: 13px; height: 13px; }
 
   .table { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
-  .thead, .trow { display: grid; grid-template-columns: 2fr 2fr 1fr 1.6fr; align-items: center; gap: 12px; padding: 11px 16px; }
+  .thead, .trow { display: grid; grid-template-columns: 1.6fr 2fr 1.4fr 0.9fr 1.6fr; align-items: center; gap: 12px; padding: 11px 16px; }
   .thead { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--mist-2); font-weight: 700; border-bottom: 1px solid var(--border); background: var(--surface-2); }
   .trow { border-top: 1px solid var(--border); }
   .trow:hover { background: var(--surface-2); }
@@ -183,5 +206,8 @@
   .btn-danger { background: none; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 5px 10px; font-size: 12.5px; color: var(--red); margin-left: 6px; cursor: pointer; }
   .btn-danger:hover:not(:disabled) { background: var(--red-tint); }
   .btn-danger:disabled { opacity: .35; cursor: default; }
+  .runtimes { display: flex; flex-wrap: wrap; gap: 4px; }
+  .rt { font-size: 11px; font-weight: 650; color: var(--accent-ink); background: var(--accent-tint); padding: 2px 8px; border-radius: 20px; }
+  .rt-bad { color: var(--red); background: var(--red-tint); }
   .err-box { background: var(--red-tint); color: var(--red); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 12.5px; }
 </style>

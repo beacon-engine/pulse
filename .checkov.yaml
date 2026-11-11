@@ -1,0 +1,23 @@
+# Checkov: misconfiguration scanning for the Dockerfile, Kubernetes manifests,
+# GitHub workflows, and hard-coded secrets. Used by `make security` and the
+# Security workflow. Accepted findings are skipped *inline*, next to the thing
+# they're about, each with its reason (`# checkov:skip=` / `checkov.io/skipN`).
+directory:
+  - .
+framework:
+  - dockerfile
+  - kubernetes
+  - github_actions
+  - secrets
+skip-path:
+  - frontend/node_modules
+  - frontend/dist
+  - target
+  # Standalone nginx image that nothing builds (the gateway image bundles the
+  # frontend). Remove it, or harden it before reviving it.
+  - frontend/Dockerfile
+  # Throwaway demo workloads for trying the Kubernetes page on a local cluster;
+  # deliberately minimal (one even crashes on purpose). Never deployed.
+  - deploy/kubernetes/examples
+compact: true
+quiet: true

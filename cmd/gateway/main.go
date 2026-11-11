@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -19,6 +20,12 @@ import (
 )
 
 func main() {
+	// `gateway healthcheck` is the image's HEALTHCHECK: the runtime image has no
+	// shell or curl, so the binary probes its own /health.
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		os.Exit(healthcheck())
+	}
+
 	log.Println("Starting Pulse gateway v0.1.0 (Go version)")
 
 	cfg := gateway.LoadConfig()
@@ -76,4 +83,32 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("graceful shutdown: %v", err)
 	}
+}
+
+// healthcheck GETs this gateway's /health on loopback and returns the process
+// exit code: 0 healthy, 1 not. With native TLS the cert is issued for the public
+// name, not 127.0.0.1, so verification is skipped for this loopback-only probe.
+func healthcheck() int {
+	cfg := gateway.LoadConfig()
+	scheme := "http"
+	if cfg.TLSCertPath != "" && cfg.TLSKeyPath != "" {
+		scheme = "https"
+	}
+	client := &http.Client{
+		Timeout: 3 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // loopback self-probe
+		},
+	}
+	resp, err := client.Get(fmt.Sprintf("%s://127.0.0.1:%d/health", scheme, cfg.HTTPPort))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "unhealthy:", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintln(os.Stderr, "unhealthy: status", resp.StatusCode)
+		return 1
+	}
+	return 0
 }

@@ -3,6 +3,9 @@ version: '3.8'
 services:
   agent:
     image: beaconengine/pulse-agent:latest
+    # Marks Pulse's own containers: the agent refuses to stop/replace them.
+    labels:
+      pulse/role: agent
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -12,6 +15,8 @@ services:
 
   gateway:
     image: beaconengine/pulse-gateway:latest
+    labels:
+      pulse/role: gateway
     restart: unless-stopped
     ports:
       - "9080:8080"

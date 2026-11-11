@@ -62,7 +62,7 @@ func dialAndServe(ctx context.Context, st *State, cfg Config) error {
 	if cfg.AutoRegister {
 		// Self-registration identity, read by the gateway pre-upgrade. The
 		// instance id makes registration idempotent across restarts/reconnects.
-		header.Set("X-Pulse-Instance", cfg.InstanceID)
+		header.Set("X-Pulse-Instance", st.InstanceID(ctx))
 		header.Set("X-Pulse-Name", cfg.EnvName)
 		header.Set("X-Pulse-Docker-Host", cfg.DockerHost)
 	}
@@ -108,21 +108,26 @@ func serve(ctx context.Context, st *State, c *websocket.Conn, cfg Config) error 
 
 	if cfg.AutoRegister {
 		go runHeartbeat(ctx, cfg.HeartbeatInterval, write)
-		// On our own shutdown (ctx cancelled), say goodbye so the gateway marks
-		// us offline gracefully and skips the down alert. Best-effort; the socket
-		// is still open here (CloseNow runs in the caller's defer, after this).
-		defer func() {
-			if ctx.Err() == nil {
-				return // a dropped session, not a deliberate shutdown — don't deregister
-			}
-			wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deregisterTimeout)
-			defer cancel()
-			_ = write(wctx, protocol.ResponseFrame{ID: protocol.EventStreamID, Resp: protocol.RespDeregister()})
-		}()
 	}
 
+	// The read loop must not use ctx: the websocket library closes the
+	// connection the moment a Read's context is cancelled, which would drop the
+	// socket before we could say goodbye. Instead, on shutdown, send the
+	// deregister (so the gateway marks us offline gracefully and skips the down
+	// alert) and then close cleanly, which ends the read loop.
+	stopShutdown := context.AfterFunc(ctx, func() {
+		wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deregisterTimeout)
+		defer cancel()
+		if cfg.AutoRegister {
+			_ = write(wctx, protocol.ResponseFrame{ID: protocol.EventStreamID, Resp: protocol.RespDeregister()})
+		}
+		_ = c.Close(websocket.StatusNormalClosure, "agent shutting down")
+	})
+	defer stopShutdown()
+	readCtx := context.WithoutCancel(ctx)
+
 	for {
-		typ, data, err := c.Read(ctx)
+		typ, data, err := c.Read(readCtx)
 		if err != nil {
 			// Clean close or transport error — either way the run loop reconnects.
 			return err

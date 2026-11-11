@@ -66,6 +66,12 @@ func (r *AgentRouter) CallOn(ctx context.Context, agentID, agentAddr *string, re
 	if agentAddr != nil && strings.TrimSpace(*agentAddr) != "" {
 		return r.transportFor(*agentAddr).Call(ctx, req)
 	}
+	if agentID != nil {
+		// The environment belongs to a push agent that isn't connected. Never
+		// fall through to the default agent: that is a different machine (or
+		// cluster), and answering for it would show the wrong environment's data.
+		return sessionError("agent " + *agentID + " is not connected")
+	}
 	return r.def.Call(ctx, req)
 }
 
@@ -138,11 +144,18 @@ func (r *AgentRouter) Register(agentID string, t AgentTransport) {
 	r.mu.Unlock()
 }
 
-// Unregister removes the push session for agentID (on disconnect).
-func (r *AgentRouter) Unregister(agentID string) {
+// UnregisterIf removes agentID's session only if it is still t, and reports
+// whether it did. With a stable agent id (PULSE_INSTANCE_ID) a redeploy's new
+// pod connects before the old one leaves; the old session's teardown must not
+// evict its replacement.
+func (r *AgentRouter) UnregisterIf(agentID string, t AgentTransport) bool {
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sessions[agentID] != t {
+		return false
+	}
 	delete(r.sessions, agentID)
-	r.mu.Unlock()
+	return true
 }
 
 // ── Pull client ──────────────────────────────────────────────────────────────
@@ -322,7 +335,8 @@ func runSession(ctx context.Context, socket *websocket.Conn, st *State, agentID 
 	outbound := make(chan protocol.RequestFrame, 64)
 	done := make(chan struct{})
 
-	st.Agent.Register(agentID, &SessionTransport{pending: p, outbound: outbound, done: done})
+	transport := &SessionTransport{pending: p, outbound: outbound, done: done}
+	st.Agent.Register(agentID, transport)
 	log.Printf("Agent '%s' connected (push session)", agentID)
 
 	// Writer: serialize queued request frames to the socket.
@@ -379,9 +393,15 @@ func runSession(ctx context.Context, socket *websocket.Conn, st *State, agentID 
 	// Teardown: stop routing to this agent and unblock any pending calls. For an
 	// auto-registered agent, mark its environment offline (a detached context, so
 	// the write survives the cancelled session). graceful → no alert.
-	st.Agent.Unregister(agentID)
+	current := st.Agent.UnregisterIf(agentID, transport)
 	close(done)
 	p.failAll()
+	if !current {
+		// A newer session for the same agent id took over (a redeploy with a
+		// stable PULSE_INSTANCE_ID): the environment is still online through it.
+		log.Printf("Agent '%s' handed over to a new session", agentID)
+		return
+	}
 	if auto {
 		_ = st.DB.MarkEnvironmentOffline(context.WithoutCancel(ctx), agentID, graceful)
 	}

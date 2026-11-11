@@ -29,7 +29,7 @@
     "mode": "debug",
     "program": "$ZED_WORKTREE_ROOT/cmd/agent",
     "cwd": "$ZED_WORKTREE_ROOT",
-    "env": { "BEACON_MODE": "listen", "BEACON_PORT": "9000" }
+    "env": { "PULSE_MODE": "listen", "PULSE_PORT": "9000" }
   },
   {
     "label": "Debug tests (current package)",

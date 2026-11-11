@@ -2,12 +2,16 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -28,6 +32,7 @@ type K8s struct {
 	kubeconfigYAML string
 	mu             sync.Mutex
 	client         *kubernetes.Clientset
+	host           string
 }
 
 // NewK8s builds a lazy Kubernetes accessor for the given target.
@@ -51,7 +56,15 @@ func (k *K8s) Client() (*kubernetes.Clientset, error) {
 		return nil, err
 	}
 	k.client = cs
+	k.host = cfg.Host
 	return cs, nil
+}
+
+// Host is the API server URL of the connected cluster ("" before connecting).
+func (k *K8s) Host() string {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.host
 }
 
 // restConfig resolves the REST config: explicit kubeconfig YAML, else the in-pod
@@ -65,19 +78,26 @@ func (k *K8s) restConfig() (*rest.Config, error) {
 		return cfg, nil
 	}
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
-	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{}).ClientConfig()
+	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{}).ClientConfig()
+	if clientcmd.IsEmptyConfig(err) {
+		return nil, errNoKubeconfig
+	}
+	return cfg, err
 }
+
+var errNoKubeconfig = errors.New("no cluster configured: not running in a pod with a ServiceAccount, " +
+	"and no kubeconfig (set PULSE_KUBECONFIG_PATH or mount ~/.kube/config)")
 
 // ── Dispatch handlers ────────────────────────────────────────────────────────
 
 func handleK8sPods(ctx context.Context, st *State) protocol.Response {
 	cs, err := st.K8s.Client()
 	if err != nil {
-		return k8sUnavailable()
+		return k8sUnavailable(err)
 	}
-	pods, err := listPods(ctx, cs)
+	pods, err := listPods(ctx, cs, st.Self)
 	if err != nil {
-		return protocol.RespError(500, err.Error())
+		return k8sError(err)
 	}
 	return protocol.RespPods(pods)
 }
@@ -85,51 +105,152 @@ func handleK8sPods(ctx context.Context, st *State) protocol.Response {
 func handleK8sNamespaces(ctx context.Context, st *State) protocol.Response {
 	cs, err := st.K8s.Client()
 	if err != nil {
-		return k8sUnavailable()
+		return k8sUnavailable(err)
 	}
 	ns, err := listNamespaces(ctx, cs)
 	if err != nil {
-		return protocol.RespError(500, err.Error())
+		return k8sError(err)
 	}
 	return protocol.RespNamespaces(ns)
 }
 
 func handleK8sRollout(ctx context.Context, st *State, namespace, deployment string) protocol.Response {
+	return handleK8sRestart(ctx, st, namespace, protocol.WorkloadDeployment, deployment)
+}
+
+// handleK8sRestart does a rolling restart (`kubectl rollout restart`) of a
+// Deployment, StatefulSet or DaemonSet.
+func handleK8sRestart(ctx context.Context, st *State, namespace, kind, name string) protocol.Response {
 	cs, err := st.K8s.Client()
 	if err != nil {
-		return k8sUnavailable()
+		return k8sUnavailable(err)
 	}
-	if err := rollout(ctx, cs, namespace, deployment); err != nil {
-		return protocol.RespError(500, err.Error())
+	w, err := getWorkload(ctx, cs, namespace, kind, name)
+	if err != nil {
+		return k8sError(err)
+	}
+	// A restart replaces every pod, so judge by the pod template's labels.
+	if reason := labelProtection(w.templateLabels); reason != "" {
+		return protectedError(namespace+"/"+name, reason)
+	}
+	if err := rollout(ctx, cs, namespace, kind, name); err != nil {
+		return k8sError(err)
 	}
 	return protocol.RespOk()
+}
+
+func handleK8sScale(ctx context.Context, st *State, namespace, kind, name string, replicas uint64) protocol.Response {
+	if kind != protocol.WorkloadDeployment && kind != protocol.WorkloadStatefulSet {
+		return protocol.RespError(400, kind+" can't be scaled: only Deployments and StatefulSets have a replica count")
+	}
+	if replicas > maxScaleReplicas {
+		return protocol.RespError(400, fmt.Sprintf("replicas must be between 0 and %d", maxScaleReplicas))
+	}
+	cs, err := st.K8s.Client()
+	if err != nil {
+		return k8sUnavailable(err)
+	}
+	w, err := getWorkload(ctx, cs, namespace, kind, name)
+	if err != nil {
+		return k8sError(err)
+	}
+	// Scaling the agent to 0 cuts the connection; scaling it up starts agents
+	// with the same cluster identity that would keep taking over each other's session.
+	if reason := labelProtection(w.templateLabels); reason != "" {
+		return protectedError(namespace+"/"+name, reason)
+	}
+	if err := scale(ctx, cs, namespace, kind, name, int32(replicas)); err != nil {
+		return k8sError(err)
+	}
+	return protocol.RespOk()
+}
+
+func handleK8sWorkloads(ctx context.Context, st *State) protocol.Response {
+	cs, err := st.K8s.Client()
+	if err != nil {
+		return k8sUnavailable(err)
+	}
+	ws, err := listWorkloads(ctx, cs)
+	if err != nil {
+		return k8sError(err)
+	}
+	return protocol.RespWorkloads(ws)
+}
+
+func handleK8sPodLogs(ctx context.Context, st *State, namespace, name, container string, tail uint32) protocol.Response {
+	cs, err := st.K8s.Client()
+	if err != nil {
+		return k8sUnavailable(err)
+	}
+	if container == "" {
+		// The API server's error for this is an opaque 400; name the choices.
+		pod, err := cs.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return k8sError(err)
+		}
+		if names := podContainerNames(pod); len(names) > 1 {
+			return protocol.RespError(400, fmt.Sprintf("pod %s/%s has %d containers; pick one of: %s",
+				namespace, name, len(names), strings.Join(names, ", ")))
+		}
+	}
+	out, err := podLogs(ctx, cs, namespace, name, container, tail)
+	if err != nil {
+		return k8sError(err)
+	}
+	return protocol.RespText(out)
 }
 
 func handleK8sDeletePod(ctx context.Context, st *State, namespace, name string) protocol.Response {
 	cs, err := st.K8s.Client()
 	if err != nil {
-		return k8sUnavailable()
+		return k8sUnavailable(err)
+	}
+	pod, err := cs.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return k8sError(err)
+	}
+	if reason := st.Self.podProtection(namespace, name, pod.Labels); reason != "" {
+		return protectedError(namespace+"/"+name, reason)
 	}
 	if err := cs.CoreV1().Pods(namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
-		return protocol.RespError(500, err.Error())
+		return k8sError(err)
 	}
 	return protocol.RespOk()
 }
 
-func k8sUnavailable() protocol.Response {
-	return protocol.RespError(503, "Kubernetes not connected")
+func k8sUnavailable(err error) protocol.Response {
+	return protocol.RespError(503, "Kubernetes is not available on this agent: "+err.Error())
+}
+
+// k8sError keeps the API server's meaning: not found stays 404, and a missing
+// RBAC permission is a 403 that names what the agent's ClusterRole lacks.
+func k8sError(err error) protocol.Response {
+	switch {
+	case apierrors.IsNotFound(err):
+		return protocol.RespError(404, err.Error())
+	case apierrors.IsForbidden(err):
+		return protocol.RespError(403, "the agent's ServiceAccount isn't allowed to do this "+
+			"(update its ClusterRole from deploy/kubernetes): "+err.Error())
+	case apierrors.IsBadRequest(err), apierrors.IsInvalid(err):
+		return protocol.RespError(400, err.Error())
+	}
+	return protocol.RespError(500, err.Error())
 }
 
 // ── Operations ───────────────────────────────────────────────────────────────
 
-func listPods(ctx context.Context, cs *kubernetes.Clientset) ([]protocol.PodInfo, error) {
+func listPods(ctx context.Context, cs *kubernetes.Clientset, self Self) ([]protocol.PodInfo, error) {
 	list, err := cs.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
 	result := make([]protocol.PodInfo, 0, len(list.Items))
 	for i := range list.Items {
-		result = append(result, mapPod(&list.Items[i]))
+		pod := &list.Items[i]
+		info := mapPod(pod)
+		info.ProtectedReason = self.podProtection(pod.Namespace, pod.Name, pod.Labels)
+		info.Protected = info.ProtectedReason != ""
+		result = append(result, info)
 	}
 	// Stable order so periodic refreshes don't reshuffle the UI.
 	sort.Slice(result, func(i, j int) bool {
@@ -182,7 +303,34 @@ func mapPod(pod *corev1.Pod) protocol.PodInfo {
 		Status:     phase,
 		Ready:      ready,
 		Containers: containers,
+		Node:       pod.Spec.NodeName,
+		IP:         pod.Status.PodIP,
+		Created:    timestamp(pod.CreationTimestamp),
+		Owner:      podOwner(pod),
 	}
+}
+
+// podOwner names the workload that manages a pod. A Deployment's pods are owned
+// by a ReplicaSet named "<deployment>-<pod-template-hash>", so the Deployment
+// is recovered from the name without an extra API call.
+func podOwner(pod *corev1.Pod) *protocol.WorkloadRef {
+	ref := metav1.GetControllerOf(pod)
+	if ref == nil {
+		return nil
+	}
+	if ref.Kind == "ReplicaSet" {
+		if hash := pod.Labels["pod-template-hash"]; hash != "" && strings.HasSuffix(ref.Name, "-"+hash) {
+			return &protocol.WorkloadRef{Kind: protocol.WorkloadDeployment, Name: strings.TrimSuffix(ref.Name, "-"+hash)}
+		}
+	}
+	return &protocol.WorkloadRef{Kind: ref.Kind, Name: ref.Name}
+}
+
+func timestamp(t metav1.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 func listNamespaces(ctx context.Context, cs *kubernetes.Clientset) ([]protocol.NamespaceInfo, error) {
@@ -202,16 +350,190 @@ func listNamespaces(ctx context.Context, cs *kubernetes.Clientset) ([]protocol.N
 	return result, nil
 }
 
+// maxScaleReplicas caps a scale request so a typo can't ask for 10000 pods.
+const maxScaleReplicas = 100
+
+// workload is the part of a Deployment/StatefulSet/DaemonSet the handlers need.
+type workload struct {
+	info           protocol.WorkloadInfo
+	templateLabels map[string]string
+}
+
+func getWorkload(ctx context.Context, cs kubernetes.Interface, namespace, kind, name string) (workload, error) {
+	apps := cs.AppsV1()
+	switch kind {
+	case protocol.WorkloadDeployment:
+		d, err := apps.Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return workload{}, err
+		}
+		return deploymentWorkload(d), nil
+	case protocol.WorkloadStatefulSet:
+		ss, err := apps.StatefulSets(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return workload{}, err
+		}
+		return statefulSetWorkload(ss), nil
+	case protocol.WorkloadDaemonSet:
+		ds, err := apps.DaemonSets(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return workload{}, err
+		}
+		return daemonSetWorkload(ds), nil
+	}
+	return workload{}, apierrors.NewBadRequest(fmt.Sprintf("unknown workload kind %q (want Deployment, StatefulSet or DaemonSet)", kind))
+}
+
+func listWorkloads(ctx context.Context, cs kubernetes.Interface) ([]protocol.WorkloadInfo, error) {
+	apps := cs.AppsV1()
+	var out []workload
+	deps, err := apps.Deployments(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	for i := range deps.Items {
+		out = append(out, deploymentWorkload(&deps.Items[i]))
+	}
+	sets, err := apps.StatefulSets(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	for i := range sets.Items {
+		out = append(out, statefulSetWorkload(&sets.Items[i]))
+	}
+	daemons, err := apps.DaemonSets(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	for i := range daemons.Items {
+		out = append(out, daemonSetWorkload(&daemons.Items[i]))
+	}
+
+	result := make([]protocol.WorkloadInfo, 0, len(out))
+	for _, w := range out {
+		w.info.ProtectedReason = labelProtection(w.templateLabels)
+		w.info.Protected = w.info.ProtectedReason != ""
+		result = append(result, w.info)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		a, b := result[i], result[j]
+		if a.Namespace != b.Namespace {
+			return a.Namespace < b.Namespace
+		}
+		if a.Name != b.Name {
+			return a.Name < b.Name
+		}
+		return a.Kind < b.Kind
+	})
+	return result, nil
+}
+
+func deploymentWorkload(d *appsv1.Deployment) workload {
+	return workload{
+		info: protocol.WorkloadInfo{
+			Kind: protocol.WorkloadDeployment, Name: d.Name, Namespace: d.Namespace,
+			Replicas: replicasOrOne(d.Spec.Replicas), Ready: d.Status.ReadyReplicas,
+			Updated: d.Status.UpdatedReplicas, Available: d.Status.AvailableReplicas,
+			Images: templateImages(d.Spec.Template), Created: timestamp(d.CreationTimestamp),
+		},
+		templateLabels: d.Spec.Template.Labels,
+	}
+}
+
+func statefulSetWorkload(ss *appsv1.StatefulSet) workload {
+	return workload{
+		info: protocol.WorkloadInfo{
+			Kind: protocol.WorkloadStatefulSet, Name: ss.Name, Namespace: ss.Namespace,
+			Replicas: replicasOrOne(ss.Spec.Replicas), Ready: ss.Status.ReadyReplicas,
+			Updated: ss.Status.UpdatedReplicas, Available: ss.Status.AvailableReplicas,
+			Images: templateImages(ss.Spec.Template), Created: timestamp(ss.CreationTimestamp),
+		},
+		templateLabels: ss.Spec.Template.Labels,
+	}
+}
+
+func daemonSetWorkload(ds *appsv1.DaemonSet) workload {
+	return workload{
+		info: protocol.WorkloadInfo{
+			Kind: protocol.WorkloadDaemonSet, Name: ds.Name, Namespace: ds.Namespace,
+			Replicas: ds.Status.DesiredNumberScheduled, Ready: ds.Status.NumberReady,
+			Updated: ds.Status.UpdatedNumberScheduled, Available: ds.Status.NumberAvailable,
+			Images: templateImages(ds.Spec.Template), Created: timestamp(ds.CreationTimestamp),
+		},
+		templateLabels: ds.Spec.Template.Labels,
+	}
+}
+
+// replicasOrOne applies the API default: an unset replica count means 1.
+func replicasOrOne(r *int32) int32 {
+	if r == nil {
+		return 1
+	}
+	return *r
+}
+
+func templateImages(t corev1.PodTemplateSpec) []string {
+	images := make([]string, 0, len(t.Spec.Containers))
+	for _, c := range t.Spec.Containers {
+		images = append(images, c.Image)
+	}
+	return images
+}
+
+func podContainerNames(pod *corev1.Pod) []string {
+	names := make([]string, 0, len(pod.Spec.Containers))
+	for _, c := range pod.Spec.Containers {
+		names = append(names, c.Name)
+	}
+	return names
+}
+
+// podLogs returns the last tail lines of one container in a pod. container may
+// be empty for a single-container pod; the API server rejects it otherwise.
+func podLogs(ctx context.Context, cs kubernetes.Interface, namespace, name, container string, tail uint32) (string, error) {
+	lines := int64(tail)
+	opts := &corev1.PodLogOptions{Container: container, Timestamps: true}
+	if lines > 0 {
+		opts.TailLines = &lines
+	}
+	b, err := cs.CoreV1().Pods(namespace).GetLogs(name, opts).DoRaw(ctx)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// scale sets a Deployment's or StatefulSet's replica count.
+func scale(ctx context.Context, cs kubernetes.Interface, namespace, kind, name string, replicas int32) error {
+	patch := []byte(fmt.Sprintf(`{"spec":{"replicas":%d}}`, replicas))
+	var err error
+	switch kind {
+	case protocol.WorkloadDeployment:
+		_, err = cs.AppsV1().Deployments(namespace).Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
+	case protocol.WorkloadStatefulSet:
+		_, err = cs.AppsV1().StatefulSets(namespace).Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
+	}
+	return err
+}
+
 // rollout triggers a rollout restart by stamping the standard
-// kubectl.kubernetes.io/restartedAt pod-template annotation.
-func rollout(ctx context.Context, cs *kubernetes.Clientset, namespace, deployment string) error {
+// kubectl.kubernetes.io/restartedAt pod-template annotation, as
+// `kubectl rollout restart` does.
+func rollout(ctx context.Context, cs kubernetes.Interface, namespace, kind, name string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	patch := fmt.Sprintf(
+	patch := []byte(fmt.Sprintf(
 		`{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":%q}}}}}`,
 		now,
-	)
-	_, err := cs.AppsV1().Deployments(namespace).Patch(
-		ctx, deployment, types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{},
-	)
+	))
+	apps := cs.AppsV1()
+	var err error
+	switch kind {
+	case protocol.WorkloadDeployment:
+		_, err = apps.Deployments(namespace).Patch(ctx, name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
+	case protocol.WorkloadStatefulSet:
+		_, err = apps.StatefulSets(namespace).Patch(ctx, name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
+	case protocol.WorkloadDaemonSet:
+		_, err = apps.DaemonSets(namespace).Patch(ctx, name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
+	}
 	return err
 }

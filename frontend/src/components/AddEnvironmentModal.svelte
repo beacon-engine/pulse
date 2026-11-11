@@ -1,5 +1,8 @@
 <script lang="ts">
   import { api } from '../lib/api';
+  import { hostsStore } from '../stores/hosts.svelte';
+  import { toast } from '../lib/toast.svelte';
+  import { RUNTIME_LABEL } from '../types/environments';
 
   let {
     onclose,
@@ -9,20 +12,42 @@
     oncreated: () => void;
   } = $props();
 
+  // "agent": a Pulse agent in listen mode, which brings whatever runtimes it can
+  // reach (Docker, Podman, Kubernetes). "endpoint": a bare container API that
+  // the default agent dials on Pulse's behalf.
+  let mode = $state<'agent' | 'endpoint'>('agent');
   let name = $state('');
+  let agentAddr = $state('');
   let dockerHost = $state('');
   let error = $state('');
   let loading = $state(false);
 
   async function submit() {
-    if (!name.trim() || !dockerHost.trim()) {
-      error = 'Both fields are required.';
+    const target =
+      mode === 'agent'
+        ? { agentAddr: agentAddr.trim(), dockerHost: dockerHost.trim() }
+        : { dockerHost: dockerHost.trim() };
+    if (!name.trim()) {
+      error = 'Name is required.';
+      return;
+    }
+    if (mode === 'agent' ? !target.agentAddr : !target.dockerHost) {
+      error = mode === 'agent' ? 'Agent address is required.' : 'Endpoint URL is required.';
       return;
     }
     loading = true;
     error = '';
     try {
-      await api.createHost(name.trim(), dockerHost.trim());
+      const env = await api.createHost(name.trim(), target);
+      const caps = await hostsStore.probe(env.id);
+      if (!caps.reachable) {
+        toast.error(`Added "${env.name}", but its agent isn't reachable: ${caps.error ?? 'unknown error'}`);
+      } else if (caps.runtimes.length === 0) {
+        toast.error(`Added "${env.name}", but no runtime was reachable through it.`);
+      } else {
+        const found = caps.runtimes.map((r) => RUNTIME_LABEL[r.kind] ?? r.kind).join(', ');
+        toast.success(`Added "${env.name}" — ${found}`);
+      }
       oncreated();
     } catch (e: any) {
       error = e?.response?.data ?? String(e);
@@ -37,34 +62,62 @@
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
   <div class="modal" onclick={(e) => e.stopPropagation()}>
     <div class="modal-header">
-      <h2>Add host</h2>
+      <h2>Add environment</h2>
       <button class="close" onclick={onclose}>✕</button>
     </div>
 
-    <p class="hint">
-      Connect Pulse to a remote Docker host. The daemon must be accessible over
-      TCP — e.g.&nbsp;<code>tcp://192.168.1.10:2375</code>.
-    </p>
+    <div class="seg" role="tablist">
+      <button role="tab" class:on={mode === 'agent'} onclick={() => (mode = 'agent')} disabled={loading}>
+        Pulse agent
+      </button>
+      <button role="tab" class:on={mode === 'endpoint'} onclick={() => (mode = 'endpoint')} disabled={loading}>
+        Container API endpoint
+      </button>
+    </div>
+
+    {#if mode === 'agent'}
+      <p class="hint">
+        A Pulse agent running in <code>listen</code> mode. Pulse uses whatever it can reach there:
+        Docker, Podman or Kubernetes. Agents in <code>dial</code> (push) mode register
+        themselves and don't need to be added here.
+      </p>
+    {:else}
+      <p class="hint">
+        A Docker or Podman API that Pulse's default agent can reach, such as
+        <code>tcp://192.168.1.10:2375</code> or <code>unix:///run/podman/podman.sock</code>.
+      </p>
+    {/if}
 
     <label>
       Name
-      <input
-        type="text"
-        bind:value={name}
-        placeholder="Production server"
-        disabled={loading}
-      />
+      <input type="text" bind:value={name} placeholder="Production cluster" disabled={loading} />
     </label>
 
-    <label>
-      Docker host URL
-      <input
-        type="text"
-        bind:value={dockerHost}
-        placeholder="tcp://192.168.1.10:2375"
-        disabled={loading}
-      />
-    </label>
+    {#if mode === 'agent'}
+      <label>
+        Agent address
+        <input
+          type="text"
+          bind:value={agentAddr}
+          placeholder="10.0.0.5:9000 or wss://agent.example.com/agent"
+          disabled={loading}
+        />
+      </label>
+      <label>
+        <span>Container endpoint on the agent <span class="opt">optional</span></span>
+        <input
+          type="text"
+          bind:value={dockerHost}
+          placeholder="Leave empty for the agent's local default"
+          disabled={loading}
+        />
+      </label>
+    {:else}
+      <label>
+        Endpoint URL
+        <input type="text" bind:value={dockerHost} placeholder="tcp://192.168.1.10:2375" disabled={loading} />
+      </label>
+    {/if}
 
     {#if error}
       <div class="error">{error}</div>
@@ -73,7 +126,7 @@
     <div class="actions">
       <button class="btn cancel" onclick={onclose} disabled={loading}>Cancel</button>
       <button class="btn primary" onclick={submit} disabled={loading}>
-        {loading ? 'Connecting…' : 'Add host'}
+        {loading ? 'Connecting…' : 'Add environment'}
       </button>
     </div>
   </div>
@@ -111,6 +164,13 @@
   }
   input:focus { border-color: #818cf8; box-shadow: 0 0 0 3px rgba(129,140,248,0.15); }
   input:disabled { opacity: 0.5; cursor: not-allowed; }
+  .seg { display: flex; gap: 4px; background: #f1f5f9; padding: 4px; border-radius: 10px; }
+  .seg button {
+    flex: 1; padding: 7px 10px; border: none; border-radius: 7px; background: none;
+    font-size: 0.8rem; font-weight: 600; color: #64748b; cursor: pointer;
+  }
+  .seg button.on { background: #fff; color: #0f172a; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  .opt { font-weight: 500; color: #94a3b8; margin-left: 4px; }
   .error { background: #fee2e2; color: #991b1b; border-radius: 8px; padding: 8px 12px; font-size: 0.8rem; }
   .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
   .btn { padding: 9px 18px; border-radius: 8px; font-size: 0.85rem; font-weight: 600; cursor: pointer; border: none; transition: all 0.15s; }

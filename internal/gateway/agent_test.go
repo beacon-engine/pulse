@@ -87,12 +87,12 @@ func TestAgentWSDisconnectUnregisters(t *testing.T) {
 	c.CloseNow() // agent drops → gateway tears the session down
 	waitRegistered(t, st, "prod", false)
 
-	// With the session gone, a routed call falls back to the (dead) default
-	// pull client and fails fast rather than hanging.
+	// With the session gone, a routed call fails fast with "not connected"
+	// rather than hanging or answering from the default agent.
 	id := "prod"
 	resp := st.Agent.CallOn(ctx, &id, nil, protocol.Request{Kind: protocol.ReqPing})
 	if resp.Kind != protocol.RespKindError {
-		t.Errorf("post-disconnect CallOn = %s, want Error (fallback)", resp.Kind)
+		t.Errorf("post-disconnect CallOn = %s, want Error (not connected)", resp.Kind)
 	}
 }
 
@@ -283,5 +283,41 @@ func TestCallOnRoutesToWSAgent(t *testing.T) {
 	resp := router.CallOn(context.Background(), nil, &wsAddr, protocol.Request{Kind: protocol.ReqPing})
 	if resp.Kind != protocol.RespKindPong {
 		t.Errorf("ws:// agent_addr route = %s, want Pong (should use the WebSocket transport)", resp.Kind)
+	}
+}
+
+// A host owned by a push agent that isn't connected must not be answered by the
+// default agent (a different machine). Here the default is a live agent that
+// would happily reply, so only an explicit refusal passes.
+func TestCallOnOfflinePushAgentDoesNotFallBack(t *testing.T) {
+	live := fakePullAgent(t, protocol.RespCapabilities(protocol.Capabilities{}))
+	router := NewAgentRouter(NewAgentClient(live))
+
+	id := "k8s:gone"
+	resp := router.CallOn(context.Background(), &id, nil, protocol.Request{Kind: protocol.ReqCapabilities})
+	status, msg, isErr := resp.AsError()
+	if !isErr || status != 503 || !strings.Contains(msg, "not connected") {
+		t.Errorf("offline push agent = %s %d %q, want 503 not connected", resp.Kind, status, msg)
+	}
+}
+
+// With a stable agent id, a redeploy's new session registers before the old one
+// leaves. The old session's teardown must not evict the replacement.
+func TestUnregisterIfKeepsReplacementSession(t *testing.T) {
+	router := NewAgentRouter(NewAgentClient("127.0.0.1:1"))
+	oldT := &SessionTransport{done: make(chan struct{})}
+	newT := &SessionTransport{done: make(chan struct{})}
+
+	router.Register("k8s:cluster", oldT)
+	router.Register("k8s:cluster", newT) // new pod connects first
+
+	if router.UnregisterIf("k8s:cluster", oldT) {
+		t.Errorf("old session's teardown removed the replacement")
+	}
+	if ids := router.ConnectedAgentIDs(); len(ids) != 1 {
+		t.Errorf("connected = %v, want the replacement still registered", ids)
+	}
+	if !router.UnregisterIf("k8s:cluster", newT) {
+		t.Errorf("current session should unregister")
 	}
 }

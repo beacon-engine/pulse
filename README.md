@@ -58,7 +58,7 @@ Pulse is two Go binaries (agent + gateway) over a shared protocol package, plus 
 | :--- | :--- | :--- |
 | **Docker** | ✅ Full | containers, images, volumes, networks, logs, exec, compose stacks |
 | **Docker Swarm** | ✅ Full | services, nodes, force rolling update |
-| **Kubernetes** | 🟡 Partial | pods, namespaces, deployment rollout (via kubeconfig / in-cluster) |
+| **Kubernetes** | 🟡 Partial | workloads (Deployments, StatefulSets, DaemonSets): scale, rolling restart · pods: per-container logs, delete · namespaces. In-cluster agent or kubeconfig — see [Kubernetes](#kubernetes) |
 | **Podman** | 🟡 Partial | works via Podman's Docker-compatible socket for container/image/volume ops; no Swarm; compose needs `podman compose` |
 | **AWS ECS** | 🚧 Planned | Task Metadata Endpoint v4 & AWS SDK |
 | **HashiCorp Nomad**| 🚧 Planned | Nomad HTTP REST API (`/v1/allocations`) |
@@ -79,7 +79,7 @@ Swarm and Kubernetes locally in isolation to test these integrations.
 - [x] **Images / volumes / networks** — list, delete, prune, connect/disconnect
 - [x] **Compose stacks** — saved stacks, up/down, detected stacks
 - [x] **Docker Swarm** — services, nodes, force update
-- [x] **Kubernetes** — pods, namespaces, rollout restart
+- [x] **Kubernetes** — workloads (scale, rolling restart), pods (per-container logs, delete), namespaces
 - [x] **Multi-host** — manage several Docker endpoints from one gateway
 - [x] **Webhooks** — token-protected recreate / redeploy / swarm update / k8s rollout
 - [x] **Observability** — Prometheus `/metrics`, Prometheus proxy, live WebSocket events
@@ -101,7 +101,7 @@ Swarm and Kubernetes locally in isolation to test these integrations.
   - [ ] Audit log of user actions
   - [ ] API tokens / SSO
 - [ ] GitOps reconciliation with drift detection
-- [ ] Advanced Kubernetes (deployments, scaling, more resource types)
+- [ ] Advanced Kubernetes (exec, events, Services/Ingress, YAML view/edit, namespace-scoped agents)
 - [ ] Multi-agent fleet management (many agents behind one gateway)
 - [ ] OpenTelemetry tracing + Grafana dashboard templates
 - [ ] High availability, backup/restore
@@ -215,10 +215,8 @@ Testing Pulse against multi-node environments locally requires distinct network 
 
 ## Environment variables
 
-Pulse aims to run with almost no configuration. New variables use the `PULSE_`
-prefix; the older `BEACON_*` names still work as **deprecated aliases** — when a
-`PULSE_*` var is unset the agent reads its `BEACON_*` equivalent and logs a
-one-time warning. Prefer the `PULSE_*` names.
+Pulse aims to run with almost no configuration. Pulse's own settings use the
+`PULSE_` prefix.
 
 The agent-liveness *tunables* (offline threshold, alert grace, retention) are
 **not** env vars — they live in the gateway database and are editable at runtime
@@ -240,20 +238,20 @@ via `PUT /api/settings`. See [Auto-registration & liveness](#auto-registration--
 ### Agent
 
 Point it at the gateway and give it the token — it self-registers on connect.
-There is **no identity env var to set**: the agent generates a unique instance id
-per process at boot.
+There is **no identity env var to set**: the agent derives its identity from the
+cluster or container daemon it manages, so restarts keep the same environment.
 
-| Variable | Default | Description | Legacy alias |
-|----------|---------|-------------|--------------|
-| `PULSE_MODE` | `listen` | `dial`/`push` (agent dials out over WSS — required for auto-register) or `listen`/`pull` (agent binds a socket; the gateway dials in). | `BEACON_MODE` |
-| `PULSE_GATEWAY_WS_URL` | — | Gateway WS URL to dial in `dial` mode, e.g. `wss://gateway.example.com/agent/ws`. Required for `dial`. | — |
-| `PULSE_TOKEN` | — | Bearer token presented on the WS upgrade (must match a `PULSE_AGENT_TOKENS` entry). | `BEACON_TOKEN` |
-| `PULSE_PORT` | `9000` | TCP port to listen on in `listen` mode. | `BEACON_PORT` |
-| `PULSE_TRANSPORT` | `tcp` | `listen`-mode transport: `tcp` (framed TCP) or `ws` (WebSocket over HTTP, rides 80/443). | `BEACON_TRANSPORT` |
-| `PULSE_INSECURE_SKIP_TLS_VERIFY` | `false` | Skip server-cert verification on the `wss://` uplink. Trusted networks / dev only. | — |
-| `HOST_ROOT` | — | Host filesystem root as seen from the container (e.g. `/host` for `-v /:/host:ro`) so host disk/mem metrics reflect the real host. Empty = bare-metal. | — |
-| `PULSE_KUBECONFIG_PATH` | — | Path to a kubeconfig file to read. | `BEACON_KUBECONFIG_PATH` |
-| `PULSE_KUBECONFIG` | — | Inline kubeconfig YAML (ignored if `…_PATH` is set). | `BEACON_KUBECONFIG` |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PULSE_MODE` | `listen` | `dial`/`push` (agent dials out over WSS — required for auto-register) or `listen`/`pull` (agent binds a socket; the gateway dials in). |
+| `PULSE_GATEWAY_WS_URL` | — | Gateway WS URL to dial in `dial` mode, e.g. `wss://gateway.example.com/agent/ws`. Required for `dial`. |
+| `PULSE_TOKEN` | — | Bearer token presented on the WS upgrade (must match a `PULSE_AGENT_TOKENS` entry). |
+| `PULSE_PORT` | `9000` | TCP port to listen on in `listen` mode. |
+| `PULSE_TRANSPORT` | `tcp` | `listen`-mode transport: `tcp` (framed TCP) or `ws` (WebSocket over HTTP, rides 80/443). |
+| `PULSE_INSECURE_SKIP_TLS_VERIFY` | `false` | Skip server-cert verification on the `wss://` uplink. Trusted networks / dev only. |
+| `HOST_ROOT` | — | Host filesystem root as seen from the container (e.g. `/host` for `-v /:/host:ro`) so host disk/mem metrics reflect the real host. Empty = bare-metal. |
+| `PULSE_KUBECONFIG_PATH` | — | Path to a kubeconfig file to read. |
+| `PULSE_KUBECONFIG` | — | Inline kubeconfig YAML (ignored if `…_PATH` is set). |
 
 **Agent — auto-registration (all optional):**
 
@@ -261,6 +259,7 @@ per process at boot.
 |----------|---------|-------------|
 | `PULSE_AUTO_REGISTER` | `on` | Self-register as an environment on connect (`dial` mode). Set `off` for the legacy static path where an admin pre-creates the environment and links it by `agent_id`. |
 | `PULSE_ENV_NAME` | hostname | Display name to register the environment under. |
+| `PULSE_INSTANCE_ID` | derived | Override the agent's identity. Normally unset — see *Identity* below. |
 | `PULSE_DOCKER_HOST` | `unix:///var/run/docker.sock` | Local Docker endpoint the registered environment points at. |
 | `PULSE_HEARTBEAT_INTERVAL` | `30s` | How often the agent calls home. Go duration (`45s`, `2m`) or bare seconds (`30`); floored at `5s`. |
 
@@ -273,10 +272,16 @@ duplicates) appear in the dashboard on their own.
 
 How it stays correct:
 
-- **Identity.** Each agent process generates a random instance id at boot. Its
-  environment is keyed by `<token_id>:<instance_id>`, so duplicated agents sharing
-  one `PULSE_AGENT_TOKENS` entry each appear as their **own** environment, and a
-  reconnect/restart *upserts* the same row instead of duplicating it.
+- **Identity.** The environment is keyed by `<token_id>:<instance_id>`, where the
+  instance id is derived from what the agent manages: in a pod, the cluster's id
+  (the `kube-system` namespace UID); on a host, the container daemon's id
+  (`docker info`). A restart, redeploy or reinstall therefore *upserts* the same
+  environment instead of leaving an offline duplicate, while agents on different
+  hosts (an autoscaled fleet) still each appear as their **own** environment. Run
+  **one agent per cluster or daemon**: two agents with the same identity are the
+  same environment, and the newest connection takes it over. If neither a cluster
+  nor a daemon is reachable at boot, the agent uses a temporary random id and
+  switches to the derived one once a runtime answers.
 - **Heartbeat.** The agent calls home every `PULSE_HEARTBEAT_INTERVAL`; a
   missed-heartbeat backstop marks an environment offline even if the socket
   half-opens without a clean close.
@@ -313,8 +318,9 @@ docker compose up -d --build
 
 This builds three images — `pulse-agent`, `pulse-gateway`, `pulse-frontend` —
 and wires them together. The agent mounts the host Docker socket; the gateway
-keeps its SQLite DB in a named volume. To manage Kubernetes, uncomment the
-kubeconfig mount in `docker-compose.yml`.
+keeps its SQLite DB in a named volume. To manage a Kubernetes cluster, run an
+agent inside it (see [Kubernetes](#kubernetes)); for a quick local look you can
+instead uncomment the kubeconfig mount in `docker-compose.yml`.
 
 ### Build & push to Docker Hub
 
@@ -381,6 +387,62 @@ metrics** (disk/memory), because those come from the OS the agent process sees.
 
 ---
 
+## Kubernetes
+
+Run one agent **inside** each cluster. It uses its own ServiceAccount, dials out
+to the gateway (no ingress needed), and shows up as its own environment.
+[`deploy/kubernetes/README.md`](deploy/kubernetes/README.md) has the full
+walkthrough. The typical setup, with the gateway in Docker Compose and a local
+cluster (OrbStack / Docker Desktop):
+
+```bash
+# 1. Gateway: accept an agent token (read at startup)
+TOKEN=$(openssl rand -hex 32)
+echo "PULSE_AGENT_TOKENS=k8s:$TOKEN" >> .env
+docker compose up -d
+
+# 2. Cluster: the same token, as a Secret
+kubectl create namespace pulse
+kubectl -n pulse create secret generic pulse-agent-token --from-literal=token="$TOKEN"
+
+# 3. In deploy/kubernetes/agent-push.yaml set:
+#      image: pulse-agent:local (imagePullPolicy: IfNotPresent) or a published tag
+#      PULSE_GATEWAY_WS_URL: ws://host.docker.internal:9080/agent/ws
+#      PULSE_ENV_NAME: my-cluster
+docker compose build agent && docker tag pulse-agent:latest pulse-agent:local
+kubectl apply -f deploy/kubernetes/agent-push.yaml
+
+# 4. Optional: something to look at
+kubectl apply -f deploy/kubernetes/examples/demo-workloads.yaml
+```
+
+Pick the new environment in the selector and open **Kubernetes**:
+
+| Section | What you can do |
+|---|---|
+| **Workloads** | Deployments, StatefulSets and DaemonSets with ready/desired counts. Scale with − / + (Deployments, StatefulSets), or start a rolling restart (all three kinds). |
+| **Pods** | Owner, node, status, age. Expand a pod to see its containers (state, restarts) and read each container's **logs**. Delete a pod and its controller replaces it. |
+| **Namespaces** | Pod count per namespace; click one (or use the filter) to narrow the page. |
+
+You manage containers in Kubernetes **through their workload**, not one by one.
+There is no "stop container": the kubelet would just start it again. To stop
+something, scale it to 0. To restart it, do a rolling restart, or delete the
+pod. To change it, change its workload. Pulse refuses to scale, restart or
+delete its own agent (or anything labelled `pulse/protected=true`), since that
+would cut off its connection to the cluster.
+
+**Why pod containers also show up under Docker.** OrbStack, Docker Desktop and
+other clusters that use the Docker runtime run every pod container on the host's
+Docker engine. They appear in that host's Docker environment as `k8s_<container>_<pod>_…`,
+alongside a `k8s_POD_…` "pause" container per pod that holds the pod's network.
+Pulse tags them **k8s**. Logs, exec and restart work there, but recreating them
+or editing their env through Docker is refused (409). The copy would run outside
+the cluster while the kubelet started another one. Clusters that use containerd
+(most cloud clusters) don't expose their containers to Docker at all, so there
+they're only visible on the Kubernetes page.
+
+---
+
 ## Authentication & Security
 
 ### Authentication (implemented)
@@ -422,6 +484,47 @@ secrecy, and mutual authentication without the weight of full TLS/PKI.
 | Variable | Where | Description |
 |----------|-------|-------------|
 | `PULSE_PAIRING_TOKEN` | agent + gateway | One-time shared secret that authenticates the first handshake. The agent prints it on first boot; paste it into the gateway config. |
+
+### Security scanning
+
+Every PR to `master`, every push to `master`, and a weekly scheduled run go
+through `.github/workflows/security.yml`:
+
+| Scanner | What it checks | Fails the build on |
+|---|---|---|
+| **Checkov** | Dockerfile, Kubernetes manifests, GitHub workflows, hard-coded secrets | Any failed check |
+| **Trivy** (`fs`) | Go and npm dependencies, committed secrets | HIGH/CRITICAL with a fix available |
+| **Trivy** (`image`) | The built agent and gateway images (OS packages + binaries) | HIGH/CRITICAL with a fix available |
+
+Issues with no upstream fix yet don't block, but every finding is uploaded to
+the repository's **Security** tab (when code scanning is enabled).
+
+Run the same scans locally (they use the scanners' official images, pinned by
+digest, so there's nothing to install):
+
+```bash
+make security          # everything
+make security-iac      # Checkov only
+make security-deps     # Trivy: dependencies + secrets
+make security-images   # Trivy: build and scan both images
+```
+
+**Accepting a finding.** Don't loosen the global config. Record the exception
+next to the thing it's about, with the reason:
+
+- Checkov in a Dockerfile: `# checkov:skip=CKV_DOCKER_3: why`
+- Checkov in a Kubernetes manifest: a `checkov.io/skipN: CKV_K8S_38=why`
+  annotation on the resource.
+- Trivy: an entry in `.trivyignore.yaml`, scoped by `paths`, with a
+  `statement` and an `expired_at` date so it gets re-checked.
+
+**Upgrading from a root gateway.** The gateway image now runs as uid 10001. An
+existing data volume created by an older (root) gateway must be handed over
+once, or the gateway can't write its database:
+
+```bash
+docker run --rm -v pulse_pulse-data:/data debian:bookworm-slim chown -R 10001:10001 /data
+```
 
 ---
 
@@ -467,7 +570,10 @@ require the `admin` role.
 | GET | `/api/hosts/:id/{images,volumes,networks,system,hardware}` | Host resources |
 | GET/POST | `/api/hosts/:id/stacks` · `/api/stacks/:id/{up,down}` | Compose stacks |
 | GET | `/api/hosts/:id/swarm/{services,nodes}` | Docker Swarm |
-| GET | `/api/k8s/{pods,namespaces}` | Kubernetes |
+| GET | `/api/hosts/:id/k8s/{pods,namespaces,workloads}` | Kubernetes |
+| GET | `/api/hosts/:id/k8s/pods/:ns/:pod/logs?container=&tail=` | Pod container logs |
+| POST | `/api/hosts/:id/k8s/workloads/:ns/:kind/:name/{scale?replicas=N,restart}` | Scale / rolling restart |
+| DELETE | `/api/hosts/:id/k8s/pods/:ns/:pod` | Delete a pod |
 | POST | `/api/webhooks/:host/...` | Token-protected deploy/redeploy hooks |
 | GET | `/api/events` | Recent container lifecycle events |
 | GET | `/metrics` · `/ws` | Prometheus metrics · live event WebSocket |

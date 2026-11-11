@@ -15,6 +15,23 @@ type ContainerInfo struct {
 	Status string  `json:"status"`
 	State  string  `json:"state"`
 	Stack  *string `json:"stack"`
+	// Protected marks Pulse's own workloads (the agent, the gateway, or anything
+	// labelled pulse/protected=true): the agent refuses to stop or replace them.
+	Protected       bool   `json:"protected,omitempty"`
+	ProtectedReason string `json:"protected_reason,omitempty"`
+	// Kubernetes is set when the kubelet created this container for a pod
+	// (e.g. Docker Desktop / OrbStack Kubernetes sharing the engine). It must be
+	// changed through its pod: recreating it with Docker would leave an orphan
+	// container outside the cluster.
+	Kubernetes *KubeletRef `json:"kubernetes,omitempty"`
+}
+
+// KubeletRef names the pod a kubelet-managed container belongs to. Container
+// is "POD" for the pod's sandbox (pause) container.
+type KubeletRef struct {
+	Namespace string `json:"namespace"`
+	Pod       string `json:"pod"`
+	Container string `json:"container"`
 }
 
 type ContainerPort struct {
@@ -46,6 +63,10 @@ type ContainerDetail struct {
 	Cmd           []string         `json:"cmd"`
 	NetworkMode   string           `json:"network_mode"`
 	RestartPolicy string           `json:"restart_policy"`
+	// See ContainerInfo.Protected and ContainerInfo.Kubernetes.
+	Protected       bool        `json:"protected,omitempty"`
+	ProtectedReason string      `json:"protected_reason,omitempty"`
+	Kubernetes      *KubeletRef `json:"kubernetes,omitempty"`
 }
 
 // Stack is a group of containers detected from compose labels.

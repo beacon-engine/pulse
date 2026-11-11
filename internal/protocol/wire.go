@@ -61,6 +61,10 @@ type Request struct {
 	Namespace      string
 	Deployment     string
 	Name           string
+	// Kubernetes: the container within a pod (logs) and the workload kind
+	// (Deployment | StatefulSet | DaemonSet) for scale/restart.
+	Container    string
+	WorkloadKind string
 }
 
 // reqPayload is the union of every request field, with wire tags. It is
@@ -82,11 +86,14 @@ type reqPayload struct {
 	Namespace      string        `json:"namespace"`
 	Deployment     string        `json:"deployment"`
 	Name           string        `json:"name"`
+	Container      string        `json:"container"`
+	WorkloadKind   string        `json:"workload_kind"`
 }
 
 // Request variant names.
 const (
 	ReqPing                = "Ping"
+	ReqCapabilities        = "Capabilities"
 	ReqListContainers      = "ListContainers"
 	ReqInspectContainer    = "InspectContainer"
 	ReqInspectRawContainer = "InspectRawContainer"
@@ -123,6 +130,10 @@ const (
 	ReqK8sNamespaces       = "K8sNamespaces"
 	ReqK8sRollout          = "K8sRollout"
 	ReqK8sDeletePod        = "K8sDeletePod"
+	ReqK8sWorkloads        = "K8sWorkloads"
+	ReqK8sPodLogs          = "K8sPodLogs"
+	ReqK8sScale            = "K8sScale"
+	ReqK8sRestart          = "K8sRestart"
 	ReqWatchEvents         = "WatchEvents"
 )
 
@@ -132,10 +143,12 @@ var reqUnit = map[string]bool{
 	ReqHardwareMetrics: true,
 	ReqK8sPods:         true,
 	ReqK8sNamespaces:   true,
+	ReqK8sWorkloads:    true,
 }
 
 // reqFields maps each data-carrying variant to the wire field names it emits.
 var reqFields = map[string][]string{
+	ReqCapabilities:        {"docker_host"},
 	ReqListContainers:      {"docker_host"},
 	ReqInspectContainer:    {"docker_host", "id"},
 	ReqInspectRawContainer: {"docker_host", "id"},
@@ -169,6 +182,9 @@ var reqFields = map[string][]string{
 	ReqScaleSwarmService:   {"docker_host", "service_id", "target_replicas"},
 	ReqK8sRollout:          {"namespace", "deployment"},
 	ReqK8sDeletePod:        {"namespace", "name"},
+	ReqK8sPodLogs:          {"namespace", "name", "container", "tail"},
+	ReqK8sScale:            {"namespace", "workload_kind", "name", "target_replicas"},
+	ReqK8sRestart:          {"namespace", "workload_kind", "name"},
 	ReqWatchEvents:         {"docker_host"},
 }
 
@@ -186,6 +202,7 @@ func (r Request) MarshalJSON() ([]byte, error) {
 		ContainerID: r.ContainerID, Stack: r.Stack, ServiceID: r.ServiceID,
 		TargetReplicas: r.TargetReplicas, Namespace: r.Namespace,
 		Deployment: r.Deployment, Name: r.Name,
+		Container: r.Container, WorkloadKind: r.WorkloadKind,
 	})
 	if err != nil {
 		return nil, err
@@ -239,6 +256,8 @@ func (r *Request) UnmarshalJSON(b []byte) error {
 		r.Namespace = p.Namespace
 		r.Deployment = p.Deployment
 		r.Name = p.Name
+		r.Container = p.Container
+		r.WorkloadKind = p.WorkloadKind
 	}
 	return nil
 }
@@ -262,6 +281,7 @@ type errorBody struct {
 const (
 	RespKindOk                = "Ok"
 	RespKindPong              = "Pong"
+	RespKindCapabilities      = "Capabilities"
 	RespKindContainers        = "Containers"
 	RespKindContainerDetail   = "ContainerDetail"
 	RespKindRaw               = "Raw"
@@ -280,6 +300,7 @@ const (
 	RespKindSwarmTasks        = "SwarmTasks"
 	RespKindPods              = "Pods"
 	RespKindNamespaces        = "Namespaces"
+	RespKindWorkloads         = "Workloads"
 	RespKindEvent             = "Event"
 	RespKindError             = "Error"
 	// RespKindHeartbeat is an agent->gateway liveness ping pushed on
@@ -298,6 +319,7 @@ func RespOk() Response                               { return Response{Kind: Res
 func RespPong() Response                             { return Response{Kind: RespKindPong} }
 func RespHeartbeat() Response                        { return Response{Kind: RespKindHeartbeat} }
 func RespDeregister() Response                       { return Response{Kind: RespKindDeregister} }
+func RespCapabilities(v Capabilities) Response       { return Response{RespKindCapabilities, v} }
 func RespContainers(v []ContainerInfo) Response      { return Response{RespKindContainers, v} }
 func RespContainerDetail(v ContainerDetail) Response { return Response{RespKindContainerDetail, v} }
 func RespRaw(v json.RawMessage) Response             { return Response{RespKindRaw, v} }
@@ -318,6 +340,7 @@ func RespSwarmNodes(v []SwarmNode) Response       { return Response{RespKindSwar
 func RespSwarmTasks(v []SwarmTask) Response       { return Response{RespKindSwarmTasks, v} }
 func RespPods(v []PodInfo) Response               { return Response{RespKindPods, v} }
 func RespNamespaces(v []NamespaceInfo) Response   { return Response{RespKindNamespaces, v} }
+func RespWorkloads(v []WorkloadInfo) Response     { return Response{RespKindWorkloads, v} }
 func RespEvent(v EventFrame) Response             { return Response{RespKindEvent, v} }
 
 // RespError builds an error reply. status is an HTTP status code the gateway relays.
