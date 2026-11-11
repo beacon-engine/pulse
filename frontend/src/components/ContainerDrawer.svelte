@@ -15,6 +15,14 @@
     onrefresh: () => void;
   } = $props();
 
+  // Pulse's own containers can be inspected but not stopped or replaced; the
+  // agent enforces this, the UI just doesn't offer it.
+  let locked = $derived(!!container.protected);
+  // A kubelet-managed container (Kubernetes on the same Docker engine) can't be
+  // replaced from here: the copy would run outside the cluster.
+  let k8s = $derived(container.kubernetes);
+  let noReplace = $derived(locked || !!k8s);
+
   type Tab = 'overview' | 'ports' | 'volumes' | 'env' | 'networks' | 'raw' | 'logs' | 'terminal';
   let tab = $state<Tab>('overview');
 
@@ -298,12 +306,12 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l14 8-14 8V4z"/></svg>
         Start
       </button>
-      <button class="hbtn" class:hbtn-danger={true} disabled={container.state !== 'running' || actionBusy}
+      <button class="hbtn" class:hbtn-danger={true} disabled={container.state !== 'running' || actionBusy || locked}
         onclick={() => action(() => api.stopContainer(hostId, container.id))}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
         Stop
       </button>
-      <button class="hbtn" disabled={actionBusy}
+      <button class="hbtn" disabled={actionBusy || locked}
         onclick={() => action(() => api.restartContainer(hostId, container.id))}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/></svg>
         Restart
@@ -313,6 +321,20 @@
       </button>
     </div>
   </div>
+
+  {#if locked}
+    <div class="locked-banner">
+      <b>Protected.</b> {container.protected_reason}. Pulse won't stop, restart, recreate or exec into it,
+      because that would cut off the connection Pulse uses to manage this environment.
+    </div>
+  {:else if k8s}
+    <div class="locked-banner">
+      <b>Managed by Kubernetes.</b> This container belongs to pod <code>{k8s.namespace}/{k8s.pod}</code>
+      {#if k8s.container === 'POD'}(its sandbox, which holds the pod's network){/if}. Logs, exec and restart
+      work here, but change it through its workload on the Kubernetes page: recreating it with Docker
+      would leave a copy running outside the cluster.
+    </div>
+  {/if}
 
   <!-- Tabs -->
   <div class="tabs">
@@ -422,7 +444,7 @@
           <span class="ok-msg">✓ Container recreated successfully</span>
         {:else}
           {#if recreateError}<span class="err-inline">{recreateError}</span>{/if}
-          <button class="btn-primary" onclick={doRecreate} disabled={recreating || editedPorts.some(p => !p.container_port || !p.host_port)}>
+          <button class="btn-primary" onclick={doRecreate} disabled={noReplace || recreating || editedPorts.some(p => !p.container_port || !p.host_port)}>
             {recreating ? 'Recreating…' : 'Recreate with these ports'}
           </button>
         {/if}
@@ -481,7 +503,7 @@
         <div class="recreate-bar" style="margin-top:14px">
           {#if envOk}<span class="ok-msg">✓ Environment updated — container restarted</span>{/if}
           {#if envError}<span class="err-inline">{envError}</span>{/if}
-          <button class="btn-primary" onclick={saveEnv} disabled={envSaving}>
+          <button class="btn-primary" onclick={saveEnv} disabled={noReplace || envSaving}>
             {envSaving ? 'Saving…' : 'Save & restart'}
           </button>
         </div>
@@ -507,7 +529,7 @@
                   <div class="net-name">{net.name}</div>
                   {#if net.ip_address}<div class="net-meta">{net.ip_address}{net.gateway ? ` · gw ${net.gateway}` : ''}</div>{/if}
                 </div>
-                <button class="net-remove" onclick={() => doNetworkDisconnect(net.id || net.name)} disabled={networkBusy} title="Disconnect">
+                <button class="net-remove" onclick={() => doNetworkDisconnect(net.id || net.name)} disabled={locked || networkBusy} title="Disconnect">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
                 </button>
               </div>
@@ -594,7 +616,7 @@
             autocomplete="off"
             spellcheck={false}
           />
-          <button class="exec-run-btn" onclick={runExec} disabled={execBusy || !execInput.trim()}>
+          <button class="exec-run-btn" onclick={runExec} disabled={locked || execBusy || !execInput.trim()}>
             {#if execBusy}
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" class="spin"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
             {:else}
@@ -911,4 +933,8 @@
   .spin { animation: spin .7s linear infinite; }
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   .hint :global(code) { font-family: 'JetBrains Mono', monospace; font-size: 11px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+  .locked-banner {
+    margin: 0 20px 4px; padding: 10px 12px; border-radius: 8px; font-size: 12.5px; line-height: 1.5;
+    background: var(--accent-tint, #eef2ff); color: var(--accent-ink, #3730a3);
+  }
 </style>

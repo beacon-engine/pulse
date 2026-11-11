@@ -27,7 +27,7 @@ import (
 
 // ── List ─────────────────────────────────────────────────────────────────────
 
-func dockerList(ctx context.Context, cli *client.Client) ([]protocol.ContainerInfo, error) {
+func dockerList(ctx context.Context, cli *client.Client, self Self) ([]protocol.ContainerInfo, error) {
 	f := filters.NewArgs()
 	for _, s := range []string{"running", "exited", "paused", "created"} {
 		f.Add("status", s)
@@ -42,13 +42,17 @@ func dockerList(ctx context.Context, cli *client.Client) ([]protocol.ContainerIn
 		if len(c.Names) > 0 {
 			name = strings.TrimPrefix(c.Names[0], "/")
 		}
+		reason := self.containerProtection(c.ID, c.Labels)
 		result = append(result, protocol.ContainerInfo{
-			ID:     c.ID,
-			Name:   name,
-			Image:  c.Image,
-			Status: c.Status,
-			State:  c.State,
-			Stack:  containerStack(c.Labels),
+			ID:              c.ID,
+			Name:            name,
+			Image:           c.Image,
+			Status:          c.Status,
+			State:           c.State,
+			Stack:           containerStack(c.Labels),
+			Protected:       reason != "",
+			ProtectedReason: reason,
+			Kubernetes:      kubeletRef(c.Labels),
 		})
 	}
 	// Stable ordering so 10s UI refreshes don't reshuffle rows.
@@ -69,7 +73,7 @@ func containerStack(labels map[string]string) *string {
 
 // ── Inspect ──────────────────────────────────────────────────────────────────
 
-func dockerInspect(ctx context.Context, cli *client.Client, id string) (protocol.ContainerDetail, error) {
+func dockerInspect(ctx context.Context, cli *client.Client, self Self, id string) (protocol.ContainerDetail, error) {
 	info, err := cli.ContainerInspect(ctx, id)
 	if err != nil {
 		return protocol.ContainerDetail{}, err
@@ -112,11 +116,16 @@ func dockerInspect(ctx context.Context, cli *client.Client, id string) (protocol
 		Ports:        ports,
 		Mounts:       mounts,
 	}
+	var labels map[string]string
 	if info.Config != nil {
 		detail.Image = info.Config.Image
 		detail.Env = info.Config.Env
 		detail.Cmd = []string(info.Config.Cmd)
+		labels = info.Config.Labels
 	}
+	detail.ProtectedReason = self.containerProtection(info.ID, labels)
+	detail.Protected = detail.ProtectedReason != ""
+	detail.Kubernetes = kubeletRef(labels)
 	if info.State != nil {
 		detail.State = info.State.Status
 		detail.StartedAt = info.State.StartedAt
@@ -273,8 +282,8 @@ func dockerRestart(ctx context.Context, cli *client.Client, id string) error {
 
 // ── Stacks (from container labels) ───────────────────────────────────────────
 
-func dockerListStacks(ctx context.Context, cli *client.Client) ([]protocol.Stack, error) {
-	all, err := dockerList(ctx, cli)
+func dockerListStacks(ctx context.Context, cli *client.Client, self Self) ([]protocol.Stack, error) {
+	all, err := dockerList(ctx, cli, self)
 	if err != nil {
 		return nil, err
 	}
@@ -448,7 +457,51 @@ func connError(msg string) protocol.Response {
 }
 
 func execError(err error) protocol.Response {
+	if client.IsErrConnectionFailed(err) {
+		return protocol.RespError(503, "no container runtime (Docker/Podman API) reachable from this agent: "+err.Error())
+	}
 	return protocol.RespError(500, err.Error())
+}
+
+// guardProtected refuses a disruptive action on one of Pulse's own containers.
+// It resolves id (a name or short id) through inspect so it can't be sidestepped
+// by addressing the container differently. ok=false → return resp as-is.
+func guardProtected(ctx context.Context, cli *client.Client, self Self, id string) (resp protocol.Response, ok bool) {
+	return guardContainer(ctx, cli, self, id, false)
+}
+
+// guardReplace is guardProtected for actions that replace the container
+// (recreate, env update). Those are also refused for kubelet-managed
+// containers: the copy would run outside Kubernetes while the kubelet starts
+// yet another one for the pod.
+func guardReplace(ctx context.Context, cli *client.Client, self Self, id string) (resp protocol.Response, ok bool) {
+	return guardContainer(ctx, cli, self, id, true)
+}
+
+func guardContainer(ctx context.Context, cli *client.Client, self Self, id string, replace bool) (protocol.Response, bool) {
+	info, err := cli.ContainerInspect(ctx, id)
+	if err != nil {
+		return execError(err), false
+	}
+	var labels map[string]string
+	if info.Config != nil {
+		labels = info.Config.Labels
+	}
+	name := strings.TrimPrefix(info.Name, "/")
+	if reason := self.containerProtection(info.ID, labels); reason != "" {
+		return protectedError(name, reason), false
+	}
+	if ref := kubeletRef(labels); replace && ref != nil {
+		return protocol.RespError(409, fmt.Sprintf(
+			"%s is managed by Kubernetes (pod %s/%s): change its pod spec or restart its workload instead; "+
+				"recreating it with Docker would leave a copy running outside the cluster",
+			name, ref.Namespace, ref.Pod)), false
+	}
+	return protocol.Response{}, true
+}
+
+func protectedError(name, reason string) protocol.Response {
+	return protocol.RespError(403, fmt.Sprintf("%s is protected (%s): Pulse blocks actions that could cut off its own connection", name, reason))
 }
 
 // dockerOp resolves the Docker client for host (502 on failure) then runs fn.

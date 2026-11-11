@@ -18,11 +18,13 @@ func Dispatch(ctx context.Context, st *State, req protocol.Request) protocol.Res
 	// ── Liveness ───────────────────────────────────────────────────────────────
 	case protocol.ReqPing:
 		return protocol.RespPong()
+	case protocol.ReqCapabilities:
+		return protocol.RespCapabilities(capabilities(ctx, st, req.DockerHost))
 
 	// ── Containers ──────────────────────────────────────────────────────────────
 	case protocol.ReqListContainers:
 		return dockerOp(st, req.DockerHost, func(cli *client.Client) protocol.Response {
-			v, err := dockerList(ctx, cli)
+			v, err := dockerList(ctx, cli, st.Self)
 			if err != nil {
 				return execError(err)
 			}
@@ -30,7 +32,7 @@ func Dispatch(ctx context.Context, st *State, req protocol.Request) protocol.Res
 		})
 	case protocol.ReqInspectContainer:
 		return dockerOp(st, req.DockerHost, func(cli *client.Client) protocol.Response {
-			v, err := dockerInspect(ctx, cli, req.ID)
+			v, err := dockerInspect(ctx, cli, st.Self, req.ID)
 			if err != nil {
 				return execError(err)
 			}
@@ -46,18 +48,30 @@ func Dispatch(ctx context.Context, st *State, req protocol.Request) protocol.Res
 		})
 	case protocol.ReqRecreateContainer:
 		return dockerOp(st, req.DockerHost, func(cli *client.Client) protocol.Response {
+			if resp, ok := guardReplace(ctx, cli, st.Self, req.ID); !ok {
+				return resp
+			}
 			return idOrErr(dockerRecreate(ctx, cli, req.ID, req.Ports))
 		})
 	case protocol.ReqRecreateLatest:
 		return dockerOp(st, req.DockerHost, func(cli *client.Client) protocol.Response {
+			if resp, ok := guardReplace(ctx, cli, st.Self, req.ID); !ok {
+				return resp
+			}
 			return idOrErr(dockerRecreateLatest(ctx, cli, req.ID, req.Pull))
 		})
 	case protocol.ReqUpdateContainerEnv:
 		return dockerOp(st, req.DockerHost, func(cli *client.Client) protocol.Response {
+			if resp, ok := guardReplace(ctx, cli, st.Self, req.ID); !ok {
+				return resp
+			}
 			return idOrErr(dockerUpdateEnv(ctx, cli, req.ID, req.Env))
 		})
 	case protocol.ReqExecContainer:
 		return dockerOp(st, req.DockerHost, func(cli *client.Client) protocol.Response {
+			if resp, ok := guardProtected(ctx, cli, st.Self, req.ID); !ok {
+				return resp
+			}
 			out, err := dockerExec(ctx, cli, req.ID, req.Cmd)
 			if err != nil {
 				return execError(err)
@@ -70,10 +84,16 @@ func Dispatch(ctx context.Context, st *State, req protocol.Request) protocol.Res
 		})
 	case protocol.ReqStopContainer:
 		return dockerOp(st, req.DockerHost, func(cli *client.Client) protocol.Response {
+			if resp, ok := guardProtected(ctx, cli, st.Self, req.ID); !ok {
+				return resp
+			}
 			return okOrErr(dockerStop(ctx, cli, req.ID))
 		})
 	case protocol.ReqRestartContainer:
 		return dockerOp(st, req.DockerHost, func(cli *client.Client) protocol.Response {
+			if resp, ok := guardProtected(ctx, cli, st.Self, req.ID); !ok {
+				return resp
+			}
 			return okOrErr(dockerRestart(ctx, cli, req.ID))
 		})
 	case protocol.ReqContainerLogs:
@@ -156,13 +176,16 @@ func Dispatch(ctx context.Context, st *State, req protocol.Request) protocol.Res
 		})
 	case protocol.ReqNetworkDisconnect:
 		return dockerOp(st, req.DockerHost, func(cli *client.Client) protocol.Response {
+			if resp, ok := guardProtected(ctx, cli, st.Self, req.ContainerID); !ok {
+				return resp
+			}
 			return okOrErr(dockerDisconnectNetwork(ctx, cli, req.NetworkID, req.ContainerID))
 		})
 
 	// ── Detected stacks ───────────────────────────────────────────────────────────
 	case protocol.ReqListDetectedStacks:
 		return dockerOp(st, req.DockerHost, func(cli *client.Client) protocol.Response {
-			v, err := dockerListStacks(ctx, cli)
+			v, err := dockerListStacks(ctx, cli, st.Self)
 			if err != nil {
 				return execError(err)
 			}
@@ -220,6 +243,14 @@ func Dispatch(ctx context.Context, st *State, req protocol.Request) protocol.Res
 		return handleK8sRollout(ctx, st, req.Namespace, req.Deployment)
 	case protocol.ReqK8sDeletePod:
 		return handleK8sDeletePod(ctx, st, req.Namespace, req.Name)
+	case protocol.ReqK8sWorkloads:
+		return handleK8sWorkloads(ctx, st)
+	case protocol.ReqK8sPodLogs:
+		return handleK8sPodLogs(ctx, st, req.Namespace, req.Name, req.Container, req.Tail)
+	case protocol.ReqK8sScale:
+		return handleK8sScale(ctx, st, req.Namespace, req.WorkloadKind, req.Name, req.TargetReplicas)
+	case protocol.ReqK8sRestart:
+		return handleK8sRestart(ctx, st, req.Namespace, req.WorkloadKind, req.Name)
 
 	// ── Event stream ────────────────────────────────────────────────────────────
 	// WatchEvents takes over a dedicated connection (handled before Dispatch in

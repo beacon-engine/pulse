@@ -5,6 +5,20 @@ export interface Container {
   status: string;
   state: string;
   stack?: string;
+  /** Pulse's own workload (agent, gateway, or labelled pulse/protected=true).
+   *  The agent refuses to stop or replace it. */
+  protected?: boolean;
+  protected_reason?: string;
+  /** Set when a kubelet created this container for a pod (Kubernetes sharing
+   *  the Docker engine). Change it through its pod, not by recreating it. */
+  kubernetes?: KubeletRef;
+}
+
+/** The pod a kubelet-managed container belongs to ("POD" = sandbox container). */
+export interface KubeletRef {
+  namespace: string;
+  pod: string;
+  container: string;
 }
 
 /// A page of results from a paginated list endpoint.
@@ -50,6 +64,13 @@ export interface ContainerDetail {
   cmd: string[];
   network_mode: string;
   restart_policy: string;
+  /** Pulse's own workload (agent, gateway, or labelled pulse/protected=true).
+   *  The agent refuses to stop or replace it. */
+  protected?: boolean;
+  protected_reason?: string;
+  /** Set when a kubelet created this container for a pod (Kubernetes sharing
+   *  the Docker engine). Change it through its pod, not by recreating it. */
+  kubernetes?: KubeletRef;
 }
 
 export interface ContainerEvent {
@@ -101,6 +122,39 @@ export interface K8sPod {
   status: string;
   ready: boolean;
   containers: PodContainer[];
+  node?: string;
+  ip?: string;
+  /** RFC 3339 */
+  created?: string;
+  /** The workload managing the pod (a ReplicaSet is resolved to its Deployment). */
+  owner?: K8sWorkloadRef;
+  /** Pulse's own workload (agent, gateway, or labelled pulse/protected=true).
+   *  The agent refuses to stop or replace it. */
+  protected?: boolean;
+  protected_reason?: string;
+}
+
+export type K8sWorkloadKind = 'Deployment' | 'StatefulSet' | 'DaemonSet';
+
+export interface K8sWorkloadRef {
+  kind: K8sWorkloadKind | string;
+  name: string;
+}
+
+export interface K8sWorkload {
+  kind: K8sWorkloadKind;
+  name: string;
+  namespace: string;
+  /** Desired pods (for a DaemonSet: nodes it should run on). */
+  replicas: number;
+  ready: number;
+  updated: number;
+  available: number;
+  images: string[];
+  created?: string;
+  /** Pulse's own workload: the agent refuses to scale or restart it. */
+  protected?: boolean;
+  protected_reason?: string;
 }
 
 export interface K8sNamespace {

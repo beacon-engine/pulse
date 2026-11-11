@@ -31,6 +31,13 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # ─────────────────────────────── Target 1: Agent ─────────────────────────────
 # The agent shells out to `docker compose`, so the runtime needs the Docker CLI.
+#
+# It runs as root on purpose: it drives the host's Docker socket, whose group id
+# differs per host, so a fixed non-root user can't reach it. In Kubernetes,
+# where no socket is mounted, the manifests run it as a non-root user instead.
+# Its liveness is the gateway session (push) or the gateway's dial (pull), both
+# of which reconnect on their own, so there is no HEALTHCHECK.
+# checkov:skip=CKV_DOCKER_3: agent needs the host Docker socket (see above)
 FROM debian:bookworm-slim AS agent
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
@@ -45,7 +52,7 @@ RUN apt-get update \
 
 COPY --from=go-builder /out/agent /usr/local/bin/agent
 
-ENV BEACON_PORT=9000
+ENV PULSE_PORT=9000
 EXPOSE 9000
 ENTRYPOINT ["agent"]
 
@@ -53,7 +60,10 @@ ENTRYPOINT ["agent"]
 FROM debian:bookworm-slim AS gateway
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd --system --gid 10001 pulse \
+ && useradd --system --uid 10001 --gid pulse --home-dir /data --shell /usr/sbin/nologin pulse \
+ && mkdir -p /data && chown pulse:pulse /data
 
 # Copy backend binary and frontend static assets
 COPY --from=go-builder /out/gateway /usr/local/bin/gateway
@@ -67,6 +77,9 @@ ENV HTTP_PORT=8080 \
 
 EXPOSE 8080
 VOLUME ["/data"]
+USER pulse
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD ["gateway", "healthcheck"]
 ENTRYPOINT ["gateway"]
 
 # ─────────────────────────────── Dev (hot-reload + debug) ────────────────────

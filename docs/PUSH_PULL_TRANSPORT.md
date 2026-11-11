@@ -44,7 +44,7 @@ self-hosted CI runners operate.
 
 ## Current architecture (baseline)
 
-- **Agent** (`agent/src/main.rs`): binds a `TcpListener` on `BEACON_PORT`, accepts
+- **Agent** (`agent/src/main.rs`): binds a `TcpListener` on `PULSE_PORT`, accepts
   raw TCP, reads framed `Request`s, runs `dispatch`, writes a `Response`.
   `WatchEvents` takes over its connection and streams events.
 - **Gateway** (`gateway/src/agent.rs`): `AgentClient::call` opens a **short-lived
@@ -105,7 +105,7 @@ pub struct ResponseFrame { pub id: u64, pub resp: Response }
 | Mode | Agent role | Gateway role | Agent connects on |
 |------|------------|--------------|-------------------|
 | **Push** (dial) | WS **client** → `wss://gateway/agent/ws` | WS **server** (axum, already has `ws`) | **outbound 443** |
-| **Pull** (listen) | WS **server** on `BEACON_PORT` | WS **client** → `wss://agent/...` | inbound (agent exposes 443) |
+| **Pull** (listen) | WS **server** on `PULSE_PORT` | WS **client** → `wss://agent/...` | inbound (agent exposes 443) |
 
 Push is the firewall-friendly default (agent only needs outbound 443). Pull still
 benefits from WSS because inbound 443 is far more often permitted than an
@@ -146,7 +146,7 @@ trait AgentTransport {
 
 ### 6. Agent
 
-- New config `BEACON_MODE = listen | dial` (default `listen`).
+- New config `PULSE_MODE = listen | dial` (default `listen`).
 - **`dial` (push):** open a WSS client to `PULSE_GATEWAY_WS_URL`, authenticate,
   then **serve `RequestFrame`s over that one socket by reusing the existing
   `dispatch`** — identical logic, different transport — and push events on the
@@ -159,7 +159,7 @@ trait AgentTransport {
 WSS makes auth clean: it's an HTTP handshake, so credentials ride in **headers**,
 validated *before* the socket is accepted — no bespoke in-band handshake.
 
-- Agent sends `Authorization: Bearer <BEACON_TOKEN>` in the upgrade request.
+- Agent sends `Authorization: Bearer <PULSE_TOKEN>` in the upgrade request.
 - Gateway validates against `PULSE_AGENT_TOKENS` in an axum extractor/middleware
   before completing the upgrade; on mismatch it returns `401` and no session is
   created.
@@ -197,7 +197,7 @@ disables verification for self-signed gateways on trusted networks only.
 
 | Side | Pull (listen) | Push (dial) |
 |------|---------------|-------------|
-| Agent | `BEACON_MODE=listen`, `BEACON_PORT`, `BEACON_TOKEN` | `BEACON_MODE=dial`, `PULSE_GATEWAY_WS_URL=wss://host/agent/ws`, `BEACON_TOKEN` |
+| Agent | `PULSE_MODE=listen`, `PULSE_PORT`, `PULSE_TOKEN` | `PULSE_MODE=dial`, `PULSE_GATEWAY_WS_URL=wss://host/agent/ws`, `PULSE_TOKEN` |
 | Gateway | `AGENT_WS_URL=wss://agent-host/...`, token | exposes `/agent/ws`, `PULSE_AGENT_TOKENS` |
 
 The gateway can run both simultaneously; each agent's transport is chosen by how

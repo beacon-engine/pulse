@@ -1,0 +1,141 @@
+name: Security
+
+# Misconfigurations (Checkov) and known vulnerabilities + committed secrets
+# (Trivy). Same pinned scanners and config files as `make security`, so a
+# failure here reproduces locally.
+#
+# Gate: any Checkov failure, or a HIGH/CRITICAL vulnerability with a fix
+# available. Everything (including unfixed issues) is also uploaded to the
+# repository's Security tab when code scanning is available.
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+  schedule:
+    # Weekly: new CVEs are published against code that hasn't changed.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Official scanner images, pinned by digest so a moved tag can't change what runs.
+  CHECKOV_IMAGE: bridgecrew/checkov:3.4.3@sha256:bfe9d70bb7f044aba49bd99675813445f106dee6072da583f51008cb667f3a63
+  TRIVY_IMAGE: aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
+
+jobs:
+  # ── 1. Misconfigurations ─────────────────────────────────────────────────────
+  checkov:
+    name: Checkov (Dockerfile, Kubernetes, workflows, secrets)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Scan
+        run: |
+          docker run --rm -v "$PWD":/src -w /src "$CHECKOV_IMAGE" \
+            --config-file .checkov.yaml \
+            -o cli -o sarif --output-file-path console,checkov.sarif
+
+      - name: Upload to Security tab
+        if: always()
+        continue-on-error: true # code scanning may not be enabled for this repo
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: checkov.sarif
+          category: checkov
+
+  # ── 2. Dependencies + committed secrets ──────────────────────────────────────
+  dependencies:
+    name: Trivy (Go/npm dependencies, secrets)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Scan (gate)
+        run: |
+          docker run --rm -v "$HOME/.cache/trivy":/root/.cache/trivy -v "$PWD":/src -w /src \
+            "$TRIVY_IMAGE" --config trivy.yaml fs .
+
+      - name: Full report
+        if: always()
+        run: |
+          docker run --rm -v "$HOME/.cache/trivy":/root/.cache/trivy -v "$PWD":/src -w /src \
+            "$TRIVY_IMAGE" --config trivy.yaml fs . \
+            --ignore-unfixed=false --exit-code 0 --format sarif --output trivy-fs.sarif
+
+      - name: Upload to Security tab
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-dependencies
+
+  # ── 3. Built images ──────────────────────────────────────────────────────────
+  images:
+    name: Trivy (${{ matrix.target }} image)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [agent, gateway]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          load: true
+          push: false
+          tags: pulse-${{ matrix.target }}:scan
+          # Reuse the release workflow's layer cache.
+          cache-from: type=gha,scope=${{ matrix.target }}
+
+      - name: Scan (gate)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$HOME/.cache/trivy":/root/.cache/trivy -v "$PWD":/src -w /src \
+            "$TRIVY_IMAGE" --config trivy.yaml image "pulse-${{ matrix.target }}:scan"
+
+      - name: Full report
+        if: always()
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$HOME/.cache/trivy":/root/.cache/trivy -v "$PWD":/src -w /src \
+            "$TRIVY_IMAGE" --config trivy.yaml image "pulse-${{ matrix.target }}:scan" \
+            --ignore-unfixed=false --exit-code 0 --format sarif --output "trivy-${{ matrix.target }}.sarif"
+
+      - name: Upload to Security tab
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-${{ matrix.target }}.sarif
+          category: trivy-${{ matrix.target }}

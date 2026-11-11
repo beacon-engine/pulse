@@ -21,3 +21,9 @@ frontend/node_modules
 .DS_Store
 # Zed local overrides
 .zed/*.local.json
+
+# Local secrets (e.g. PULSE_AGENT_TOKENS)
+.env
+
+# Local security scan reports
+*.sarif

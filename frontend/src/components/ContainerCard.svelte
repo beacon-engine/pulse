@@ -33,7 +33,10 @@
 <div class="card" style="--accent:{accent}">
   <div class="card-top">
     <div>
-      <div class="name">{container.name}</div>
+      <div class="name">
+        {container.name}
+        {#if container.kubernetes}<span class="k8s-tag" title={`Managed by Kubernetes: pod ${container.kubernetes.namespace}/${container.kubernetes.pod}`}>k8s</span>{/if}
+      </div>
       <div class="image">{container.image}</div>
     </div>
     <StatusBadge state={container.state} />
@@ -49,12 +52,14 @@
     >Start</button>
     <button
       class="btn stop"
-      disabled={container.state !== 'running' || busy}
+      disabled={container.state !== 'running' || busy || container.protected}
+      title={container.protected ? `Protected: ${container.protected_reason}` : undefined}
       onclick={() => act(onstop)}
     >Stop</button>
     <button
       class="btn restart"
-      disabled={busy}
+      disabled={busy || container.protected}
+      title={container.protected ? `Protected: ${container.protected_reason}` : undefined}
       onclick={() => act(onrestart)}
     >Restart</button>
   </div>
@@ -96,4 +101,8 @@
   .btn.start:hover:not(:disabled)   { background: #d1fae5; border-color: #6ee7b7; color: #065f46; }
   .btn.stop:hover:not(:disabled)    { background: #fee2e2; border-color: #fca5a5; color: #991b1b; }
   .btn.restart:hover:not(:disabled) { background: #ede9fe; border-color: #c4b5fd; color: #5b21b6; }
+  .k8s-tag {
+    margin-left: 6px; font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--blue, #1d4ed8); background: var(--blue-tint, #dbeafe); padding: 1px 6px; border-radius: 20px;
+  }
 </style>

@@ -1,8 +1,8 @@
 package gateway
 
 import (
-	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/beacon-engine/pulse/internal/protocol"
 )
@@ -12,12 +12,10 @@ import (
 
 func (st *State) handleK8sPods(w http.ResponseWriter, r *http.Request) {
 	agentID, agentAddr, _, ok := st.resolveTarget(w, r, r.PathValue("id"))
-	log.Println(agentID, agentAddr, ok)
 	if !ok {
 		return
 	}
 	resp := st.Agent.CallOn(r.Context(), agentID, agentAddr, protocol.Request{Kind: protocol.ReqK8sPods})
-	log.Println(resp)
 	if resp.Kind != protocol.RespKindPods {
 		writeUnexpected(w, resp)
 		return
@@ -36,7 +34,6 @@ func (st *State) handleK8sNamespaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := st.Agent.CallOn(r.Context(), agentID, agentAddr, protocol.Request{Kind: protocol.ReqK8sNamespaces})
-	log.Println(resp)
 	if resp.Kind != protocol.RespKindNamespaces {
 		writeUnexpected(w, resp)
 		return
@@ -64,4 +61,70 @@ func (st *State) handleK8sDeletePod(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (st *State) handleK8sWorkloads(w http.ResponseWriter, r *http.Request) {
+	var v []protocol.WorkloadInfo
+	if st.proxy(w, r, r.PathValue("id"),
+		func(string) protocol.Request { return protocol.Request{Kind: protocol.ReqK8sWorkloads} },
+		protocol.RespKindWorkloads, &v) {
+		writeJSON(w, http.StatusOK, orEmpty(v))
+	}
+}
+
+func (st *State) handleK8sPodLogs(w http.ResponseWriter, r *http.Request) {
+	tail := uint32(clampInt(atoiDefault(r.URL.Query().Get("tail"), 200), 1, 2000))
+	var out string
+	if st.proxy(w, r, r.PathValue("id"),
+		func(string) protocol.Request {
+			return protocol.Request{
+				Kind:      protocol.ReqK8sPodLogs,
+				Namespace: r.PathValue("namespace"),
+				Name:      r.PathValue("name"),
+				Container: r.URL.Query().Get("container"),
+				Tail:      tail,
+			}
+		},
+		protocol.RespKindText, &out) {
+		writeText(w, out)
+	}
+}
+
+// handleK8sScale sets a Deployment's or StatefulSet's replica count
+// (?replicas=N).
+func (st *State) handleK8sScale(w http.ResponseWriter, r *http.Request) {
+	replicas, err := strconv.ParseUint(r.URL.Query().Get("replicas"), 10, 32)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "replicas must be a non-negative integer")
+		return
+	}
+	if st.proxy(w, r, r.PathValue("id"),
+		func(string) protocol.Request {
+			return protocol.Request{
+				Kind:           protocol.ReqK8sScale,
+				Namespace:      r.PathValue("namespace"),
+				WorkloadKind:   r.PathValue("kind"),
+				Name:           r.PathValue("name"),
+				TargetReplicas: replicas,
+			}
+		},
+		protocol.RespKindOk, nil) {
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// handleK8sRestart does a rolling restart of a Deployment, StatefulSet or DaemonSet.
+func (st *State) handleK8sRestart(w http.ResponseWriter, r *http.Request) {
+	if st.proxy(w, r, r.PathValue("id"),
+		func(string) protocol.Request {
+			return protocol.Request{
+				Kind:         protocol.ReqK8sRestart,
+				Namespace:    r.PathValue("namespace"),
+				WorkloadKind: r.PathValue("kind"),
+				Name:         r.PathValue("name"),
+			}
+		},
+		protocol.RespKindOk, nil) {
+		w.WriteHeader(http.StatusNoContent)
+	}
 }

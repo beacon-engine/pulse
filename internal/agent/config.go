@@ -7,13 +7,10 @@
 package agent
 
 import (
-	"log"
 	"os"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // Mode is how the agent reaches the gateway.
@@ -59,7 +56,7 @@ type Config struct {
 	// ListenTransport selects how the agent serves in Listen (pull) mode:
 	// "tcp" (framed TCP, default) or "ws" (WebSocket over HTTP — rides 80/443,
 	// so it traverses the firewalls/proxies that block arbitrary TCP ports).
-	// From PULSE_TRANSPORT (legacy BEACON_TRANSPORT).
+	// From PULSE_TRANSPORT.
 	ListenTransport string
 	// InsecureSkipTLSVerify disables server-certificate verification on the
 	// wss:// uplink (PULSE_INSECURE_SKIP_TLS_VERIFY). Trusted networks only.
@@ -71,9 +68,9 @@ type Config struct {
 	// gateway (default on). Turn off (PULSE_AUTO_REGISTER=off) for the legacy
 	// static path where an admin pre-creates the environment.
 	AutoRegister bool
-	// InstanceID uniquely identifies this running agent process. Generated fresh
-	// at boot (no config): stable for the process lifetime so in-process
-	// reconnects dedup, and gone on exit so a replacement is legitimately new.
+	// InstanceID overrides the agent's identity (PULSE_INSTANCE_ID). Normally
+	// unset: the identity is derived from the cluster or daemon the agent
+	// manages (see identity.go), so restarts keep the same environment.
 	InstanceID string
 	// EnvName is the human-readable name to register under (PULSE_ENV_NAME);
 	// defaults to the hostname.
@@ -89,33 +86,20 @@ type Config struct {
 // LoadConfig reads the agent configuration from the environment.
 func LoadConfig() Config {
 	return Config{
-		Mode:                  parseMode(envAlias("PULSE_MODE", "BEACON_MODE")),
-		Port:                  parsePort(envAlias("PULSE_PORT", "BEACON_PORT"), 9000),
+		Mode:                  parseMode(os.Getenv("PULSE_MODE")),
+		Port:                  parsePort(os.Getenv("PULSE_PORT"), 9000),
 		GatewayURL:            nonEmpty(os.Getenv("PULSE_GATEWAY_WS_URL")),
-		GatewayToken:          nonEmpty(envAlias("PULSE_TOKEN", "BEACON_TOKEN")),
+		GatewayToken:          nonEmpty(os.Getenv("PULSE_TOKEN")),
 		KubeconfigYAML:        loadKubeconfig(),
 		HostRoot:              os.Getenv("HOST_ROOT"),
 		InsecureSkipTLSVerify: truthy(os.Getenv("PULSE_INSECURE_SKIP_TLS_VERIFY")),
-		ListenTransport:       parseListenTransport(envAlias("PULSE_TRANSPORT", "BEACON_TRANSPORT")),
+		ListenTransport:       parseListenTransport(os.Getenv("PULSE_TRANSPORT")),
 		AutoRegister:          boolOr(os.Getenv("PULSE_AUTO_REGISTER"), true),
-		InstanceID:            uuid.NewString(),
+		InstanceID:            strings.TrimSpace(os.Getenv("PULSE_INSTANCE_ID")),
 		EnvName:               envName(),
 		DockerHost:            orDefault(os.Getenv("PULSE_DOCKER_HOST"), defaultDockerHost),
 		HeartbeatInterval:     parseInterval(os.Getenv("PULSE_HEARTBEAT_INTERVAL"), defaultHeartbeat),
 	}
-}
-
-// envAlias reads pulseKey, falling back to the deprecated beaconKey (logging a
-// one-time notice when only the legacy name is set). Returns "" when neither set.
-func envAlias(pulseKey, beaconKey string) string {
-	if v := os.Getenv(pulseKey); strings.TrimSpace(v) != "" {
-		return v
-	}
-	if v := os.Getenv(beaconKey); strings.TrimSpace(v) != "" {
-		log.Printf("warning: %s is deprecated; rename it to %s", beaconKey, pulseKey)
-		return v
-	}
-	return ""
 }
 
 // envName is the display name to register under: PULSE_ENV_NAME, else the
@@ -175,15 +159,15 @@ func parseInterval(v string, def time.Duration) time.Duration {
 }
 
 // loadKubeconfig sources explicit kubeconfig YAML from PULSE_KUBECONFIG_PATH (a
-// file to read; legacy BEACON_KUBECONFIG_PATH) or, failing that, the inline
-// PULSE_KUBECONFIG (legacy BEACON_KUBECONFIG). Empty ("") means auto-discover.
+// file to read) or, failing that, the inline PULSE_KUBECONFIG. Empty ("") means
+// auto-discover.
 func loadKubeconfig() string {
-	if path := envAlias("PULSE_KUBECONFIG_PATH", "BEACON_KUBECONFIG_PATH"); path != "" {
+	if path := strings.TrimSpace(os.Getenv("PULSE_KUBECONFIG_PATH")); path != "" {
 		if data, err := os.ReadFile(path); err == nil {
 			return string(data)
 		}
 	}
-	return envAlias("PULSE_KUBECONFIG", "BEACON_KUBECONFIG")
+	return strings.TrimSpace(os.Getenv("PULSE_KUBECONFIG"))
 }
 
 func nonEmpty(v string) string {

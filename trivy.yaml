@@ -1,0 +1,22 @@
+# Trivy: known vulnerabilities in Go/npm dependencies and in the built images,
+# plus committed secrets. Used by `make security` and the Security workflow.
+#
+# Policy: fail on HIGH/CRITICAL that have a fix available. Issues with no
+# upstream fix yet (mostly Debian base-image packages) are reported in the
+# GitHub Security tab but don't block. Exceptions go in .trivyignore.yaml, each
+# scoped, explained, and with an expiry date.
+severity:
+  - HIGH
+  - CRITICAL
+exit-code: 1
+ignorefile: .trivyignore.yaml
+vulnerability:
+  ignore-unfixed: true
+scan:
+  scanners:
+    - vuln
+    - secret
+  skip-dirs:
+    - frontend/node_modules
+    - frontend/dist
+    - target

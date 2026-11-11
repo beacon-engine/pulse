@@ -1,0 +1,11 @@
+# Accepted Trivy findings. Every entry is scoped to where it occurs, says why,
+# and expires, so it gets re-checked instead of silently living forever.
+vulnerabilities:
+  - id: CVE-2026-78661
+    paths:
+      - "usr/libexec/docker/cli-plugins/docker-compose"
+    statement: >-
+      golang.org/x/net inside Docker's own Compose plugin, installed from
+      Docker's apt repo into the agent image. Fixed when Docker ships a rebuilt
+      plugin; Pulse's own binaries are already on the patched x/net.
+    expired_at: 2027-01-10

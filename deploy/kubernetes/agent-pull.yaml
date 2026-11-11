@@ -14,14 +14,20 @@ kind: ClusterRole
 metadata:
   name: pulse-agent
 rules:
+  # Pods page: list, delete (the controller recreates it) and read logs.
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "delete"]
   - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["get", "list"]
+  # Workloads: list, scale (patch spec.replicas) and rolling restart (patch the
+  # pod template's restartedAt annotation).
   - apiGroups: ["apps"]
-    resources: ["deployments"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
     verbs: ["get", "list", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -44,6 +50,11 @@ metadata:
   namespace: pulse
   labels:
     app: pulse-agent
+  annotations:
+    # Accepted Checkov findings, each with its reason:
+    checkov.io/skip1: CKV_K8S_38=The agent reads pods and namespaces through the Kubernetes API, so it needs its ServiceAccount token.
+    checkov.io/skip2: CKV_K8S_43=Pin the image by digest when you deploy; the release pipeline publishes latest and sha-<commit> tags.
+    checkov.io/skip3: CKV_K8S_15=IfNotPresent is required for the locally built pulse-agent:local image loaded into the cluster.
 spec:
   replicas: 1
   selector:
@@ -53,26 +64,60 @@ spec:
     metadata:
       labels:
         app: pulse-agent
+        # Marks the agent's pods as Pulse's own: Pulse won't delete them or
+        # roll out their Deployment (that would cut its own data stream).
+        pulse/role: agent
     spec:
       serviceAccountName: pulse-agent
+      # In a cluster the agent only talks to the Kubernetes API (no Docker
+      # socket), so it runs unprivileged: non-root, no capabilities, read-only
+      # root filesystem, default seccomp.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: agent
           image: pulse-agent:local
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 9000
-              name: beacon
+              name: pulse
           env:
-            - name: BEACON_MODE
+            - name: PULSE_MODE
               value: "listen"
-            - name: BEACON_PORT
+            - name: PULSE_PORT
               value: "9000"
+          # A bare TCP connect: the agent closes probe connections quietly.
+          readinessProbe:
+            tcpSocket:
+              port: pulse
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: pulse
+            initialDelaySeconds: 5
+            periodSeconds: 20
           resources:
             requests:
               cpu: "25m"
               memory: "32Mi"
             limits:
+              cpu: "250m"
               memory: "128Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
@@ -84,7 +129,23 @@ spec:
   selector:
     app: pulse-agent
   ports:
-    - name: beacon
+    - name: pulse
       port: 9000
       targetPort: 9000
       nodePort: 30900
+---
+# Only the agent protocol port is reachable.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pulse-agent
+  namespace: pulse
+spec:
+  podSelector:
+    matchLabels:
+      app: pulse-agent
+  policyTypes: ["Ingress"]
+  ingress:
+    - ports:
+        - port: 9000
+          protocol: TCP

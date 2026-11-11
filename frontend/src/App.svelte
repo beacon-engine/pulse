@@ -7,6 +7,7 @@
   import AuthScreen from "./components/AuthScreen.svelte";
   import TopLoader from "./components/TopLoader.svelte";
   import ToastContainer from "./components/ToastContainer.svelte";
+  import RuntimeUnavailable from "./components/RuntimeUnavailable.svelte";
 
   import UsersPage from "./pages/UsersPage.svelte";
   import HostsPage from "./pages/HostsPage.svelte";
@@ -28,7 +29,7 @@
   import { toast } from "./lib/toast.svelte";
   import { debounce } from "./lib/timing";
   import type { Container } from "./types/containers";
-  import type { Environment } from "./types/environments";
+  import type { Environment, Requirement } from "./types/environments";
 
   // ── Theme ─────────────────────────────────────────────────────────────────
   let theme = $state<"light" | "dark">("light");
@@ -51,19 +52,24 @@
     loadingStore.reset(); // Reset in-flight loader counter on route transitions
   });
 
-  const NAV: { id: Route; label: string; icon: string }[] = [
+  type NavItem = { id: Route; label: string; icon: string; requires?: Requirement };
+
+  const NAV: NavItem[] = [
     {
       id: "containers",
+      requires: "containers",
       label: "Containers",
       icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M3 11h18M8 7V4.5A1.5 1.5 0 0 1 9.5 3h5A1.5 1.5 0 0 1 16 4.5V7"/></svg>`,
     },
     {
       id: "stacks",
+      requires: "containers",
       label: "Stacks",
       icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.4"/><rect x="14" y="3" width="7" height="7" rx="1.4"/><rect x="3" y="14" width="7" height="7" rx="1.4"/><rect x="14" y="14" width="7" height="7" rx="1.4"/></svg>`,
     },
     {
       id: "swarm",
+      requires: "swarm",
       label: "Swarm",
       icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="5" r="2"/><circle cx="19" cy="9" r="2"/><circle cx="19" cy="15" r="2"/><circle cx="12" cy="19" r="2"/><circle cx="5" cy="15" r="2"/><circle cx="5" cy="9" r="2"/><path d="M7 9l4-2.5M13 9l4 2.5M17 15l-4 2.5M11 15l-4-2.5"/></svg>`,
     },
@@ -79,25 +85,44 @@
     },
     {
       id: "resources",
+      requires: "containers",
       label: "Resources",
       icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
     },
     {
       id: "kubernetes",
+      requires: "kubernetes",
       label: "Kubernetes",
       icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2L20 6.5V17.5L12 22L4 17.5V6.5L12 2Z"/><path d="M12 22V12M20 6.5L12 12M4 6.5L12 12"/></svg>`,
     },
   ];
 
-  const USERS_NAV: { id: Route; label: string; icon: string } = {
+  const USERS_NAV: NavItem = {
     id: "users",
     label: "Users",
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13A4 4 0 0 1 16 11"/></svg>`,
   };
 
+  // Only offer pages the active environment's runtimes can back: a
+  // Kubernetes-only agent has no Containers page, a Podman host has no Swarm.
   let navItems = $derived(
-    account?.role === "admin" ? [...NAV, USERS_NAV] : NAV
+    (account?.role === "admin" ? [...NAV, USERS_NAV] : NAV).filter(
+      (n) => !n.requires || hostsStore.supports(n.requires)
+    )
   );
+
+  let routeRequirement = $derived(NAV.find((n) => n.id === route)?.requires);
+
+  // Switching to an environment that can't back the current page moves to the
+  // first page it can (e.g. Containers → Kubernetes for a cluster agent). An
+  // unreachable agent stays put so the explanation panel is shown instead.
+  $effect(() => {
+    const caps = hostsStore.activeCapabilities;
+    if (!caps?.reachable || !routeRequirement) return;
+    if (hostsStore.supports(routeRequirement)) return;
+    const next = NAV.find((n) => n.requires && hostsStore.supports(n.requires));
+    navigate(next?.id ?? "events");
+  });
 
   // ── Modals ────────────────────────────────────────────────────────────────
   let showAddHost = $state(false);
@@ -413,7 +438,7 @@
       <div class="topbar">
         <div class="topbar-left">
           <h1>
-            {navItems.find((n) => n.id === route)?.label ??
+            {[...NAV, USERS_NAV].find((n) => n.id === route)?.label ??
               (route === "hosts" ? "Hosts" : "")}
           </h1>
           <div class="topbar-sub">
@@ -453,7 +478,9 @@
 
       <!-- Content Views -->
       <div class="content">
-        {#if route === "containers"}
+        {#if routeRequirement && !hostsStore.supports(routeRequirement)}
+          <RuntimeUnavailable requirement={routeRequirement} />
+        {:else if route === "containers"}
           <ContainersPage />
         {:else if route === "stacks"}
           <StacksPage />

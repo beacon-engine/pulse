@@ -55,7 +55,8 @@
   {#each hosts as host (host.id)}
     <div class="host-row" class:active={host.id === activeId}>
       <button class="host-btn" onclick={() => onselect(host)}>
-        <span class="dot" class:local={host.is_local}></span>
+        <span class="dot" class:local={host.is_local} class:offline={host.status === 'offline'}
+          title={host.status === 'offline' ? 'Agent offline' : undefined}></span>
         {#if editingId === host.id}
           <!-- svelte-ignore a11y-autofocus -->
           <input
@@ -150,4 +151,5 @@
     transition: background .12s;
   }
   .see-all:hover { background: var(--accent-tint); }
+  .dot.offline { background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; opacity: .5; }
 </style>

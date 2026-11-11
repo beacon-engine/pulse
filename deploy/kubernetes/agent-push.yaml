@@ -3,11 +3,16 @@
 # The agent dials OUT to the gateway over WebSocket and serves requests on that
 # one session, so the cluster only needs outbound egress to the gateway — no
 # inbound ports, no ingress for the agent. Kubernetes credentials come from the
-# pod's ServiceAccount (in-pod RBAC): the agent's K8sTarget::Auto path calls
-# `Client::try_default()`, which reads the mounted ServiceAccount token.
+# pod's ServiceAccount (the RBAC below); no kubeconfig needed.
 #
-# Replace the REPLACE_ME_* values, then:  kubectl apply -f agent-push.yaml
-# See README.md for the gateway-side config and the kubeconfig-file alternative.
+# The token Secret is created by hand, not in this file, so re-applying it
+# never resets the token:
+#   kubectl create namespace pulse
+#   kubectl -n pulse create secret generic pulse-agent-token --from-literal=token=<token>
+# <token> is the value half of a PULSE_AGENT_TOKENS=<name>:<token> entry on the
+# gateway. Then set the REPLACE_ME_* values below and:
+#   kubectl apply -f agent-push.yaml
+# See README.md in this directory for the full walkthrough.
 ---
 apiVersion: v1
 kind: Namespace
@@ -20,23 +25,27 @@ metadata:
   name: pulse-agent
   namespace: pulse
 ---
-# Cluster-wide read of pods/namespaces + rollout-restart of deployments. These
-# are exactly the verbs the agent's kubernetes.rs uses:
-#   list_pods (Api::all → cluster-wide list), delete_pod, list_namespaces,
-#   rollout (strategic patch of a Deployment's pod-template annotation).
+# Exactly the verbs the agent's Kubernetes page uses (internal/agent/kubernetes.go).
+# It can't read Secrets or ConfigMaps, exec into pods, or create anything.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: pulse-agent
 rules:
+  # Pods page: list, delete (the controller recreates it) and read logs.
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "delete"]
   - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["get", "list"]
+  # Workloads: list, scale (patch spec.replicas) and rolling restart (patch the
+  # pod template's restartedAt annotation).
   - apiGroups: ["apps"]
-    resources: ["deployments"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
     verbs: ["get", "list", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -52,18 +61,6 @@ subjects:
     name: pulse-agent
     namespace: pulse
 ---
-# The bearer token the agent presents on the WS upgrade. It MUST match the value
-# side of a `PULSE_AGENT_TOKENS=<agent_id>:<token>` entry on the gateway (the
-# gateway maps token -> agent_id and registers the session under that id).
-apiVersion: v1
-kind: Secret
-metadata:
-  name: pulse-agent-token
-  namespace: pulse
-type: Opaque
-stringData:
-  token: "REPLACE_ME_AGENT_TOKEN"
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -71,6 +68,14 @@ metadata:
   namespace: pulse
   labels:
     app: pulse-agent
+  annotations:
+    # Accepted Checkov findings, each with its reason:
+    checkov.io/skip1: CKV_K8S_38=The agent reads pods and namespaces through the Kubernetes API, so it needs its ServiceAccount token.
+    checkov.io/skip2: CKV_K8S_43=Pin the image by digest when you deploy; the release pipeline publishes latest and sha-<commit> tags.
+    checkov.io/skip3: CKV_K8S_14=The release pipeline publishes latest and sha-<commit>; use a sha-<commit> tag in production.
+    checkov.io/skip4: CKV_K8S_35=The agent reads its token from PULSE_TOKEN; file-based credentials come with agent enrollment (docs/AGENT_ENROLLMENT.md).
+    checkov.io/skip5: CKV_K8S_8=Push agents open no port to probe; the uplink reconnects on its own and the gateway marks the agent offline on missed heartbeats.
+    checkov.io/skip6: CKV_K8S_9=Push agents serve no traffic, so readiness doesn't apply.
 spec:
   replicas: 1
   selector:
@@ -80,15 +85,27 @@ spec:
     metadata:
       labels:
         app: pulse-agent
+        # Marks the agent's pods as Pulse's own: Pulse won't delete them or
+        # roll out their Deployment (that would cut its own data stream).
+        pulse/role: agent
     spec:
       serviceAccountName: pulse-agent
+      # In a cluster the agent only talks to the Kubernetes API (no Docker
+      # socket), so it runs unprivileged: non-root, no capabilities, read-only
+      # root filesystem, default seccomp.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: agent
           # Replace with your registry image (or load into kind/minikube).
           image: beaconengine/pulse-agent:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           env:
-            - name: BEACON_MODE
+            - name: PULSE_MODE
               value: "dial"
             # Gateway WS endpoint. Use ws:// for a plaintext in-cluster gateway,
             # wss:// when TLS is terminated at/in front of the gateway.
@@ -96,7 +113,14 @@ spec:
             #   external TLS:          wss://pulse.example.com/agent/ws
             - name: PULSE_GATEWAY_WS_URL
               value: "wss://REPLACE_ME_GATEWAY_HOST/agent/ws"
-            - name: BEACON_TOKEN
+            # No identity to configure: the agent uses the cluster's id, so a
+            # restart/redeploy keeps the same environment in Pulse. Run one
+            # agent per cluster. (PULSE_INSTANCE_ID overrides it if you must.)
+            # The environment's name in Pulse (defaults to the pod's hostname,
+            # which changes on every restart).
+            - name: PULSE_ENV_NAME
+              value: "REPLACE_ME_CLUSTER_NAME"
+            - name: PULSE_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: pulse-agent-token
@@ -105,14 +129,35 @@ spec:
             # (disables server-cert verification — trusted networks only):
             # - name: PULSE_INSECURE_SKIP_TLS_VERIFY
             #   value: "1"
-            # No BEACON_KUBECONFIG* → K8sTarget::Auto → in-pod ServiceAccount.
+            # No PULSE_KUBECONFIG* → the in-pod ServiceAccount is used.
           resources:
             requests:
               cpu: "25m"
               memory: "32Mi"
             limits:
+              cpu: "250m"
               memory: "128Mi"
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# Push agents only dial out: refuse all inbound traffic. Egress stays open
+# (the gateway and the Kubernetes API server).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pulse-agent
+  namespace: pulse
+spec:
+  podSelector:
+    matchLabels:
+      app: pulse-agent
+  policyTypes: ["Ingress"]

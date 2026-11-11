@@ -6,11 +6,14 @@
     hostId,
     containerId,
     containerName,
+    fetchLogs,
     onclose,
   }: {
-    hostId: number;
-    containerId: string;
+    hostId?: string;
+    containerId?: string;
     containerName: string;
+    /** Overrides the Docker fetch, e.g. for a Kubernetes pod's container. */
+    fetchLogs?: (tail: number) => Promise<string>;
     onclose: () => void;
   } = $props();
 
@@ -22,7 +25,9 @@
   async function load() {
     loading = true;
     try {
-      logs = await api.getContainerLogs(hostId, containerId, tail);
+      logs = fetchLogs
+        ? await fetchLogs(tail)
+        : await api.getContainerLogs(hostId!, containerId!, tail);
     } catch (e) {
       logs = `Error fetching logs: ${e}`;
     } finally {

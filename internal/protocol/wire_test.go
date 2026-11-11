@@ -25,11 +25,16 @@ func TestRequestMarshalShapes(t *testing.T) {
 		{Request{Kind: ReqPing}, `"Ping"`},
 		{Request{Kind: ReqHardwareMetrics}, `"HardwareMetrics"`},
 		{Request{Kind: ReqK8sPods}, `"K8sPods"`},
+		{Request{Kind: ReqCapabilities, DockerHost: "h"}, `{"Capabilities":{"docker_host":"h"}}`},
 		{Request{Kind: ReqListContainers, DockerHost: "h"}, `{"ListContainers":{"docker_host":"h"}}`},
 		{Request{Kind: ReqListContainers}, `{"ListContainers":{"docker_host":""}}`}, // empty host = local, must emit
 		{Request{Kind: ReqInspectContainer, DockerHost: "h", ID: "c1"}, `{"InspectContainer":{"docker_host":"h","id":"c1"}}`},
 		{Request{Kind: ReqContainerLogs, ID: "c1", Tail: 100}, `{"ContainerLogs":{"docker_host":"","id":"c1","tail":100}}`},
 		{Request{Kind: ReqK8sRollout, Namespace: "ns", Deployment: "api"}, `{"K8sRollout":{"deployment":"api","namespace":"ns"}}`},
+		{Request{Kind: ReqK8sWorkloads}, `"K8sWorkloads"`},
+		{Request{Kind: ReqK8sPodLogs, Namespace: "ns", Name: "web-1", Container: "app", Tail: 50}, `{"K8sPodLogs":{"container":"app","name":"web-1","namespace":"ns","tail":50}}`},
+		{Request{Kind: ReqK8sScale, Namespace: "ns", WorkloadKind: "Deployment", Name: "api", TargetReplicas: 3}, `{"K8sScale":{"name":"api","namespace":"ns","target_replicas":3,"workload_kind":"Deployment"}}`},
+		{Request{Kind: ReqK8sRestart, Namespace: "ns", WorkloadKind: "StatefulSet", Name: "db"}, `{"K8sRestart":{"name":"db","namespace":"ns","workload_kind":"StatefulSet"}}`},
 		{Request{Kind: ReqScaleSwarmService, ServiceID: "s", TargetReplicas: 3}, `{"ScaleSwarmService":{"docker_host":"","service_id":"s","target_replicas":3}}`},
 	}
 	for _, c := range cases {

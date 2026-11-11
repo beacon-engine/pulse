@@ -9,6 +9,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege: jobs only read the repo (pushing images uses Docker Hub creds).
+permissions:
+  contents: read
+
 jobs:
   # ── 1. Build & Push Pulse Agent ──────────────────────────────────────────────
   build-agent:

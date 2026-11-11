@@ -38,8 +38,8 @@ func main() {
 			log.Println("warning: PULSE_TOKEN is unset — the gateway will reject the session unless it allows unauthenticated agents")
 		}
 		if cfg.AutoRegister {
-			log.Printf("Pulse agent dialing gateway at %s (push mode; auto-register as %q, instance %s)",
-				cfg.GatewayURL, cfg.EnvName, cfg.InstanceID)
+			log.Printf("Pulse agent dialing gateway at %s (push mode; auto-register as %q, identity %s)",
+				cfg.GatewayURL, cfg.EnvName, st.InstanceID(ctx))
 		} else {
 			log.Printf("Pulse agent dialing gateway at %s (push mode; auto-register disabled)", cfg.GatewayURL)
 		}

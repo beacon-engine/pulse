@@ -12,6 +12,7 @@ import type {
   HostNetwork,
   K8sNamespace,
   K8sPod,
+  K8sWorkload,
   Page,
   SavedStack,
   Stack,
@@ -20,7 +21,7 @@ import type {
   SwarmTask,
   SystemInfo,
 } from "../types/containers";
-import type { Environment } from "../types/environments";
+import type { Environment, HostCapabilities } from "../types/environments";
 import { loadingStore } from "../stores/loading.svelte";
 
 export type {
@@ -35,6 +36,7 @@ export type {
   HostNetwork,
   K8sNamespace,
   K8sPod,
+  K8sWorkload,
   Page,
   SavedStack,
   Stack,
@@ -43,6 +45,7 @@ export type {
   SwarmTask,
   SystemInfo,
   Environment,
+  HostCapabilities,
 };
 
 /// Options for paginated list endpoints.
@@ -210,11 +213,22 @@ export class PulseClient {
     return data;
   }
 
-  async createHost(name: string, dockerHost: string): Promise<Environment> {
+  /** Register an environment reached through a Pulse agent (agentAddr) and/or
+   *  a container API endpoint (dockerHost). At least one must be given. */
+  async createHost(
+    name: string,
+    target: { agentAddr?: string; dockerHost?: string },
+  ): Promise<Environment> {
     const { data } = await this.http.post<Environment>("/hosts", {
       name,
-      docker_host: dockerHost,
+      docker_host: target.dockerHost ?? "",
+      agent_addr: target.agentAddr || null,
     });
+    return data;
+  }
+
+  async getHostCapabilities(id: string): Promise<HostCapabilities> {
+    const { data } = await this.http.get<HostCapabilities>(`/hosts/${id}/capabilities`);
     return data;
   }
 
@@ -660,6 +674,45 @@ export class PulseClient {
     return data;
   }
 
+  async getK8sWorkloads(hostId: string): Promise<K8sWorkload[]> {
+    const { data } = await this.http.get<K8sWorkload[]>(
+      `/hosts/${hostId}/k8s/workloads`,
+    );
+    return data;
+  }
+
+  /** container may be omitted for a single-container pod. */
+  async getK8sPodLogs(
+    hostId: string,
+    namespace: string,
+    pod: string,
+    container?: string,
+    tail = 200,
+  ): Promise<string> {
+    const { data } = await this.http.get<string>(
+      `/hosts/${hostId}/k8s/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(pod)}/logs`,
+      { params: { container, tail }, responseType: "text" },
+    );
+    return data;
+  }
+
+  async scaleK8sWorkload(
+    hostId: string,
+    w: { namespace: string; kind: string; name: string },
+    replicas: number,
+  ): Promise<void> {
+    await this.http.post(`${k8sWorkloadPath(hostId, w)}/scale`, null, {
+      params: { replicas },
+    });
+  }
+
+  async restartK8sWorkload(
+    hostId: string,
+    w: { namespace: string; kind: string; name: string },
+  ): Promise<void> {
+    await this.http.post(`${k8sWorkloadPath(hostId, w)}/restart`);
+  }
+
   async deleteK8sPod(
     hostId: string,
     namespace: string,
@@ -669,6 +722,13 @@ export class PulseClient {
       `/hosts/${hostId}/k8s/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
     );
   }
+}
+
+function k8sWorkloadPath(
+  hostId: string,
+  w: { namespace: string; kind: string; name: string },
+): string {
+  return `/hosts/${hostId}/k8s/workloads/${encodeURIComponent(w.namespace)}/${encodeURIComponent(w.kind)}/${encodeURIComponent(w.name)}`;
 }
 
 export const api = new PulseClient();

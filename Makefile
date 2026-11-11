@@ -3,7 +3,7 @@ GOBIN := $(shell go env GOPATH)/bin
 
 .PHONY: help tools build test fmt vet check \
         watch-gateway watch-agent debug-gateway debug-agent \
-        frontend clean
+        frontend clean security security-iac security-deps security-images
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -35,7 +35,7 @@ watch-gateway: ## Hot-reload the gateway locally (rebuild + restart on save)
 	  STATIC_DIR=./frontend/dist PULSE_DB_RESET_ON_MISMATCH=1 $(GOBIN)/air -c .air.gateway.toml
 
 watch-agent: ## Hot-reload the agent locally (rebuild + restart on save)
-	BEACON_MODE=listen BEACON_PORT=9000 $(GOBIN)/air -c .air.agent.toml
+	PULSE_MODE=listen PULSE_PORT=9000 $(GOBIN)/air -c .air.agent.toml
 
 debug-gateway: ## Debug the gateway locally under dlv-dap (attach Zed on :2345)
 	$(GOBIN)/dlv dap --listen=:2345 --log
@@ -60,6 +60,27 @@ dev-debug-gateway: ## Debug the containerized gateway: run dlv-dap in it, attach
 
 dev-debug-agent: ## Debug the containerized agent: run dlv-dap in it, attach Zed on :2346
 	$(DEV) exec agent sh -c "pkill air 2>/dev/null; pkill -f tmp/agent 2>/dev/null; dlv dap --listen=:2346 --log"
+
+# ── Security scans (same pinned scanners + config as .github/workflows/security.yml)
+# Scanners run from their official images, pinned by digest: nothing to install.
+CHECKOV_IMAGE := bridgecrew/checkov:3.4.3@sha256:bfe9d70bb7f044aba49bd99675813445f106dee6072da583f51008cb667f3a63
+TRIVY_IMAGE   := aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
+TRIVY := docker run --rm -v pulse-trivy-cache:/root/.cache/trivy -v "$(CURDIR)":/src:ro -w /src \
+	-v /var/run/docker.sock:/var/run/docker.sock $(TRIVY_IMAGE) --config trivy.yaml
+
+security: security-iac security-deps security-images ## Run all security scans (Checkov + Trivy)
+
+security-iac: ## Checkov: Dockerfile, k8s manifests, workflows, secrets
+	docker run --rm -v "$(CURDIR)":/src:ro -w /src $(CHECKOV_IMAGE) --config-file .checkov.yaml
+
+security-deps: ## Trivy: Go/npm dependencies and committed secrets
+	$(TRIVY) fs .
+
+security-images: ## Trivy: build the agent + gateway images and scan them
+	docker build -q --target agent -t pulse-agent:scan . >/dev/null
+	docker build -q --target gateway -t pulse-gateway:scan . >/dev/null
+	$(TRIVY) image pulse-agent:scan
+	$(TRIVY) image pulse-gateway:scan
 
 clean: ## Remove build artifacts
 	rm -rf ./bin ./tmp
