@@ -11,10 +11,11 @@ import (
 	"syscall"
 
 	"github.com/beacon-engine/pulse/internal/agent"
+	"github.com/beacon-engine/pulse/internal/version"
 )
 
 func main() {
-	log.Println("Starting Pulse agent v0.1.0 (Go)")
+	log.Printf("Starting Pulse agent %s (Go)", version.Version)
 
 	cfg := agent.LoadConfig()
 	st := agent.NewState(cfg)

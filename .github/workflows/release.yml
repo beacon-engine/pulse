@@ -1,5 +1,13 @@
 name: Build & Push Docker Images
 
+# Every push to master publishes the images as latest and sha-<commit>.
+#
+# A push whose VERSION has no tag yet is a release (the merge of a
+# release/vX.Y.Z or hotfix/vX.Y.Z branch; see ci.yml): the images are also
+# tagged X.Y.Z and X.Y, and once both are pushed the commit is tagged vX.Y.Z
+# with a GitHub release. The binaries and dashboard report X.Y.Z; other builds
+# report X.Y.Z-dev+<commit>.
+
 on:
   push:
     branches:
@@ -7,16 +15,52 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel a run midway: a cancelled release would publish images
+  # without its tag.
+  cancel-in-progress: false
 
 # Least privilege: jobs only read the repo (pushing images uses Docker Hub creds).
+# Only the release job can write, to create the tag and release.
 permissions:
   contents: read
 
 jobs:
+  # ── 0. Version ───────────────────────────────────────────────────────────────
+  version:
+    name: Resolve Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      release: ${{ steps.v.outputs.release }}
+      build_version: ${{ steps.v.outputs.build_version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Read VERSION and check for an existing tag
+        id: v
+        run: |
+          v=$(tr -d '[:space:]' < VERSION)
+          if [[ ! "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=VERSION::VERSION must be X.Y.Z, got '$v'"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v$v" >/dev/null; then
+            release=false
+            build="$v-dev+${GITHUB_SHA::7}"
+          else
+            release=true
+            build="$v"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "build_version=$build" >> "$GITHUB_OUTPUT"
+          echo "VERSION $v, release=$release, build version $build" >> "$GITHUB_STEP_SUMMARY"
+
   # ── 1. Build & Push Pulse Agent ──────────────────────────────────────────────
   build-agent:
     name: Build & Push Agent
+    needs: version
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -39,6 +83,8 @@ jobs:
           tags: |
             type=raw,value=latest
             type=sha,format=short
+            type=semver,pattern={{version}},value=v${{ needs.version.outputs.version }},enable=${{ needs.version.outputs.release == 'true' }}
+            type=semver,pattern={{major}}.{{minor}},value=v${{ needs.version.outputs.version }},enable=${{ needs.version.outputs.release == 'true' }}
 
       - name: Build & Push Agent
         uses: docker/build-push-action@v5
@@ -47,6 +93,7 @@ jobs:
           target: agent
           platforms: linux/amd64
           push: true
+          build-args: PULSE_VERSION=${{ needs.version.outputs.build_version }}
           tags: ${{ steps.meta-agent.outputs.tags }}
           labels: ${{ steps.meta-agent.outputs.labels }}
           cache-from: type=gha,scope=agent
@@ -55,6 +102,7 @@ jobs:
   # ── 2. Build & Push Pulse Gateway (Includes Frontend) ────────────────────────
   build-gateway:
     name: Build & Push Gateway (Bundled Frontend)
+    needs: version
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -77,6 +125,8 @@ jobs:
           tags: |
             type=raw,value=latest
             type=sha,format=short
+            type=semver,pattern={{version}},value=v${{ needs.version.outputs.version }},enable=${{ needs.version.outputs.release == 'true' }}
+            type=semver,pattern={{major}}.{{minor}},value=v${{ needs.version.outputs.version }},enable=${{ needs.version.outputs.release == 'true' }}
 
       - name: Build & Push Gateway
         uses: docker/build-push-action@v5
@@ -85,7 +135,33 @@ jobs:
           target: gateway
           platforms: linux/amd64
           push: true
+          build-args: PULSE_VERSION=${{ needs.version.outputs.build_version }}
           tags: ${{ steps.meta-gateway.outputs.tags }}
           labels: ${{ steps.meta-gateway.outputs.labels }}
           cache-from: type=gha,scope=gateway
           cache-to: type=gha,mode=max,scope=gateway
+
+  # ── 3. Tag & GitHub Release (releases only) ──────────────────────────────────
+  publish-release:
+    name: Tag & Publish Release
+    needs: [version, build-agent, build-gateway]
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create the vX.Y.Z tag and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.version.outputs.version }}
+          DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          cat > notes.md <<EOF
+          Docker images:
+
+          - \`$DOCKERHUB_USER/pulse-gateway:$VERSION\`
+          - \`$DOCKERHUB_USER/pulse-agent:$VERSION\`
+          EOF
+          gh release create "v$VERSION" --target "$GITHUB_SHA" \
+            --title "Pulse v$VERSION" --notes-file notes.md --generate-notes

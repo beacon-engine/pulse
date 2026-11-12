@@ -7,14 +7,16 @@ name: Security
 # Gate: any Checkov failure, or a HIGH/CRITICAL vulnerability with a fix
 # available. Everything (including unfixed issues) is also uploaded to the
 # repository's Security tab when code scanning is available.
+#
+# Runs on PRs into release and hotfix branches, which is where changes are
+# gated; master only receives already-scanned release branches, so merging
+# there just builds and pushes images (release.yml).
 
 on:
   pull_request:
     branches:
-      - master
-  push:
-    branches:
-      - master
+      - "release/**"
+      - "hotfix/**"
   schedule:
     # Weekly: new CVEs are published against code that hasn't changed.
     - cron: "0 6 * * 1"
