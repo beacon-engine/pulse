@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.4
 
 # ─────────────────────────────── 1. Frontend Builder ─────────────────────────
-FROM node:20-bookworm-slim AS frontend-builder
+FROM node:24-bookworm-slim AS frontend-builder
 WORKDIR /frontend
 
 # Cache package dependencies
