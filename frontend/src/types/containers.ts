@@ -113,13 +113,34 @@ export interface PodContainer {
   image: string;
   ready: boolean;
   restart_count: number;
-  state: string;
+  state: 'running' | 'waiting' | 'terminated' | 'unknown';
+  /** Why it is waiting or terminated: CrashLoopBackOff, Completed, OOMKilled, … */
+  reason?: string;
+  message?: string;
+  exit_code?: number;
+  /** RFC 3339: when the current run started (running) or ended (terminated). */
+  started?: string;
+  /** The previous run, e.g. why the container last restarted. */
+  last_reason?: string;
+  last_exit_code?: number;
+  /** Runtime ID, e.g. "docker://3f2a…". */
+  container_id?: string;
+  ports?: { name?: string; container_port: number; protocol: string }[];
+  resources?: {
+    cpu_request?: string;
+    cpu_limit?: string;
+    memory_request?: string;
+    memory_limit?: string;
+  };
 }
 
 export interface K8sPod {
   name: string;
   namespace: string;
+  /** Pod phase: Pending, Running, Succeeded, Failed, Unknown. */
   status: string;
+  /** What kubectl shows when the phase is misleading: CrashLoopBackOff, Terminating, … */
+  reason?: string;
   ready: boolean;
   containers: PodContainer[];
   node?: string;
@@ -128,6 +149,8 @@ export interface K8sPod {
   created?: string;
   /** The workload managing the pod (a ReplicaSet is resolved to its Deployment). */
   owner?: K8sWorkloadRef;
+  labels?: Record<string, string>;
+  qos_class?: string;
   /** Pulse's own workload (agent, gateway, or labelled pulse/protected=true).
    *  The agent refuses to stop or replace it. */
   protected?: boolean;
@@ -155,6 +178,50 @@ export interface K8sWorkload {
   /** Pulse's own workload: the agent refuses to scale or restart it. */
   protected?: boolean;
   protected_reason?: string;
+}
+
+export interface K8sNode {
+  name: string;
+  status: 'Ready' | 'NotReady' | 'Unknown';
+  unschedulable?: boolean;
+  roles: string[];
+  /** kubelet version */
+  version: string;
+  os_image: string;
+  kernel_version: string;
+  arch: string;
+  container_runtime: string;
+  internal_ip?: string;
+  cpu: string;
+  memory: string;
+  pods: string;
+  alloc_cpu: string;
+  alloc_memory: string;
+  pressure?: string[];
+  created?: string;
+}
+
+export interface K8sService {
+  name: string;
+  namespace: string;
+  type: 'ClusterIP' | 'NodePort' | 'LoadBalancer' | 'ExternalName' | string;
+  cluster_ip?: string;
+  external?: string[];
+  ports: { name?: string; protocol: string; port: number; target_port: string; node_port?: number }[];
+  selector?: Record<string, string>;
+  created?: string;
+}
+
+export interface K8sEvent {
+  namespace: string;
+  type: 'Normal' | 'Warning' | string;
+  reason: string;
+  message: string;
+  object_kind: string;
+  object_name: string;
+  count: number;
+  last_seen?: string;
+  source?: string;
 }
 
 export interface K8sNamespace {

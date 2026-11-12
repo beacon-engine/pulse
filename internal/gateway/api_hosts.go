@@ -33,6 +33,21 @@ func (st *State) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleGetHost returns one environment, so the dashboard can restore the
+// environment named in its URL even when it isn't on the first page of hosts.
+func (st *State) handleGetHost(w http.ResponseWriter, r *http.Request) {
+	env, err := st.DB.GetEnvironment(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if env == nil {
+		writeErr(w, http.StatusNotFound, "environment not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, env)
+}
+
 func (st *State) handleCreateHost(w http.ResponseWriter, r *http.Request) {
 	var body protocol.CreateHostBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -152,6 +167,11 @@ func (st *State) handleHostCapabilities(w http.ResponseWriter, r *http.Request) 
 	default:
 		_, msg := unexpected(resp)
 		out.Error = msg
+	}
+	if agentID == nil && agentAddr != nil {
+		// A pull agent: record what this probe just learned instead of waiting
+		// for the prober's next round.
+		_ = st.DB.SetPullStatus(r.Context(), r.PathValue("id"), out.Reachable)
 	}
 	writeJSON(w, http.StatusOK, out)
 }

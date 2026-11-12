@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"log"
+	"math/rand/v2"
 	"net/http"
 	"sync"
 	"time"
@@ -27,8 +28,24 @@ import (
 // heartbeat on an interval so the gateway can track liveness, and sends a
 // deregister on clean shutdown so scale-down doesn't look like an outage.
 
-// reconnectDelay is the wait between reconnect attempts after the session drops.
-const reconnectDelay = 5 * time.Second
+// Reconnect backoff: the wait starts at minReconnectDelay, doubles after each
+// failed dial up to maxReconnectDelay, and resets once a session is
+// established. Each wait is jittered so a fleet doesn't reconnect in lockstep
+// after a gateway restart.
+const (
+	minReconnectDelay = 1 * time.Second
+	maxReconnectDelay = 30 * time.Second
+)
+
+// Keepalive: the agent pings the gateway every pingInterval and drops the
+// session when a pong doesn't arrive within pingTimeout. Without it a link
+// that dies silently (network drop, gateway host crash) goes unnoticed until a
+// write fails, which TCP can delay for many minutes. Variables so tests can
+// shorten them.
+var (
+	pingInterval = 20 * time.Second
+	pingTimeout  = 10 * time.Second
+)
 
 // deregisterTimeout bounds the best-effort goodbye sent on shutdown.
 const deregisterTimeout = 2 * time.Second
@@ -36,22 +53,41 @@ const deregisterTimeout = 2 * time.Second
 // RunUplink runs the uplink forever: (re)connect to the gateway, serve until the
 // session drops, then back off and retry.
 func RunUplink(ctx context.Context, st *State, cfg Config) {
+	delay := minReconnectDelay
 	for {
-		if err := dialAndServe(ctx, st, cfg); err != nil {
-			log.Printf("Uplink to %s failed/closed: %v; reconnecting in %s", cfg.GatewayURL, err, reconnectDelay)
+		connected, err := dialAndServe(ctx, st, cfg)
+		if ctx.Err() != nil {
+			return
+		}
+		if connected {
+			delay = minReconnectDelay
+		}
+		wait := jitter(delay)
+		if err != nil {
+			log.Printf("Uplink to %s failed/closed: %v; reconnecting in %s", cfg.GatewayURL, err, wait.Round(time.Millisecond))
 		} else {
-			log.Printf("Uplink to %s closed; reconnecting in %s", cfg.GatewayURL, reconnectDelay)
+			log.Printf("Uplink to %s closed; reconnecting in %s", cfg.GatewayURL, wait.Round(time.Millisecond))
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(reconnectDelay):
+		case <-time.After(wait):
+		}
+		if !connected {
+			delay = min(delay*2, maxReconnectDelay)
 		}
 	}
 }
 
+// jitter returns a random wait in [d/2, d].
+func jitter(d time.Duration) time.Duration {
+	return d/2 + rand.N(d/2+1)
+}
+
 // dialAndServe opens one WSS session and serves it until it closes or errors.
-func dialAndServe(ctx context.Context, st *State, cfg Config) error {
+// connected reports whether the session was established, so the caller can
+// reset its backoff.
+func dialAndServe(ctx context.Context, st *State, cfg Config) (connected bool, err error) {
 	opts := &websocket.DialOptions{}
 	header := http.Header{}
 	if cfg.GatewayToken != "" {
@@ -79,21 +115,23 @@ func dialAndServe(ctx context.Context, st *State, cfg Config) error {
 
 	c, _, err := websocket.Dial(ctx, cfg.GatewayURL, opts)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer c.CloseNow()
 	// Responses (logs, inspect, image lists) can exceed the 32 KiB default.
 	c.SetReadLimit(protocol.MaxFrame)
 
 	log.Printf("Uplink connected to gateway %s", cfg.GatewayURL)
-	return serve(ctx, st, c, cfg)
+	return true, serve(ctx, st, c, cfg)
 }
 
 // serve reads RequestFrames off the session, dispatches each, and writes the
-// correlated ResponseFrame back. When auto-registering it also runs the
-// heartbeat and the shutdown deregister. Keepalive ping/pong is handled by the
-// library. Writes are serialized: the reply path, the heartbeat and the
-// deregister all share one socket.
+// correlated ResponseFrame back. Requests run concurrently (the gateway
+// correlates replies by id), so a slow one doesn't hold up the rest or starve
+// the read loop, which is also what processes keepalive pongs. When
+// auto-registering it also runs the heartbeat and the shutdown deregister.
+// Writes are serialized: replies, the heartbeat and the deregister all share
+// one socket.
 func serve(ctx context.Context, st *State, c *websocket.Conn, cfg Config) error {
 	var writeMu sync.Mutex
 	write := func(wctx context.Context, frame protocol.ResponseFrame) error {
@@ -106,8 +144,13 @@ func serve(ctx context.Context, st *State, c *websocket.Conn, cfg Config) error 
 		return c.Write(wctx, websocket.MessageText, out)
 	}
 
+	// Background work for this session stops when it ends.
+	sessCtx, endSession := context.WithCancel(ctx)
+	defer endSession()
+
+	go keepalive(sessCtx, c, pingInterval, pingTimeout)
 	if cfg.AutoRegister {
-		go runHeartbeat(ctx, cfg.HeartbeatInterval, write)
+		go runHeartbeat(sessCtx, cfg.HeartbeatInterval, write)
 	}
 
 	// The read loop must not use ctx: the websocket library closes the
@@ -142,9 +185,42 @@ func serve(ctx context.Context, st *State, c *websocket.Conn, cfg Config) error 
 			continue
 		}
 
-		resp := Dispatch(ctx, st, frame.Req)
-		if err := write(ctx, protocol.ResponseFrame{ID: frame.ID, Resp: resp}); err != nil {
-			return err
+		go func() {
+			// The request runs for the agent's lifetime, not the session's: a
+			// dropped link shouldn't abort a half-done deploy. Only the reply
+			// is lost.
+			resp := Dispatch(ctx, st, frame.Req)
+			if err := write(sessCtx, protocol.ResponseFrame{ID: frame.ID, Resp: resp}); err != nil && sessCtx.Err() == nil {
+				// The socket is broken; closing it ends the read loop, which
+				// reconnects.
+				c.CloseNow()
+			}
+		}()
+	}
+}
+
+// keepalive pings the gateway every interval and closes the socket when a pong
+// doesn't come back within timeout; the read loop then fails and the run loop
+// reconnects. It stops quietly when the session ends.
+func keepalive(ctx context.Context, c *websocket.Conn, interval, timeout time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		pctx, cancel := context.WithTimeout(ctx, timeout)
+		err := c.Ping(pctx)
+		cancel()
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("Uplink: gateway didn't answer a ping within %s; reconnecting", timeout)
+			c.CloseNow()
+			return
 		}
 	}
 }

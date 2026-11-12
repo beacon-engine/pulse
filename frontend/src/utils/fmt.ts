@@ -28,3 +28,13 @@ export function fmtDate(ts: number): string {
     day: "numeric",
   });
 }
+
+/** Compact age of an RFC 3339 timestamp, as kubectl prints it: 45s, 12m, 3h, 9d. */
+export function fmtAge(iso?: string): string {
+  if (!iso) return "—";
+  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+  if (s < 60) return `${Math.floor(s)}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}

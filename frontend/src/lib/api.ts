@@ -10,8 +10,11 @@ import type {
   EnvVar,
   HardwareMetrics,
   HostNetwork,
+  K8sEvent,
   K8sNamespace,
+  K8sNode,
   K8sPod,
+  K8sService,
   K8sWorkload,
   Page,
   SavedStack,
@@ -34,8 +37,11 @@ export type {
   EnvVar,
   HardwareMetrics,
   HostNetwork,
+  K8sEvent,
   K8sNamespace,
+  K8sNode,
   K8sPod,
+  K8sService,
   K8sWorkload,
   Page,
   SavedStack,
@@ -210,6 +216,11 @@ export class PulseClient {
     const { data } = await this.http.get<Page<Environment>>("/hosts", {
       params: pageParams(opts),
     });
+    return data;
+  }
+
+  async getHost(id: string): Promise<Environment> {
+    const { data } = await this.http.get<Environment>(`/hosts/${encodeURIComponent(id)}`);
     return data;
   }
 
@@ -678,6 +689,22 @@ export class PulseClient {
     const { data } = await this.http.get<K8sWorkload[]>(
       `/hosts/${hostId}/k8s/workloads`,
     );
+    return data;
+  }
+
+  async getK8sNodes(hostId: string): Promise<K8sNode[]> {
+    const { data } = await this.http.get<K8sNode[]>(`/hosts/${hostId}/k8s/nodes`);
+    return data;
+  }
+
+  async getK8sServices(hostId: string): Promise<K8sService[]> {
+    const { data } = await this.http.get<K8sService[]>(`/hosts/${hostId}/k8s/services`);
+    return data;
+  }
+
+  /** The cluster's most recent events, newest first. */
+  async getK8sEvents(hostId: string): Promise<K8sEvent[]> {
+    const { data } = await this.http.get<K8sEvent[]>(`/hosts/${hostId}/k8s/events`);
     return data;
   }
 

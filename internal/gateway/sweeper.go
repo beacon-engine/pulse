@@ -62,7 +62,11 @@ func (st *State) sweepAgents(ctx context.Context) {
 	}
 	for _, env := range pending {
 		if st.SlackWebhook != "" {
-			msg := fmt.Sprintf(":red_circle: *Pulse* — agent `%s` is down (no heartbeat)", env.Name)
+			why := "no heartbeat"
+			if env.Source == "manual" {
+				why = "unreachable"
+			}
+			msg := fmt.Sprintf(":red_circle: *Pulse* — agent `%s` is down (%s)", env.Name, why)
 			go sendSlack(context.WithoutCancel(ctx), st.SlackWebhook, msg)
 		}
 		st.Events.Broadcast(fmt.Sprintf(`{"event":"agent_down","host":"%s"}`, env.Name))

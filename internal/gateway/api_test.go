@@ -92,11 +92,25 @@ func TestAPIHostsCRUD(t *testing.T) {
 		t.Errorf("list?search=prod = %+v", page)
 	}
 
+	resp, _ = c.Get(srv.URL + "/api/hosts/" + created.ID)
+	var got protocol.Environment
+	json.NewDecoder(resp.Body).Decode(&got)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || got.ID != created.ID || got.Name != "prod" {
+		t.Errorf("GET host = %d %+v", resp.StatusCode, got)
+	}
+
 	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/hosts/"+created.ID, nil)
 	resp, _ = c.Do(req)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Errorf("DELETE host status = %d, want 204", resp.StatusCode)
+	}
+
+	resp, _ = c.Get(srv.URL + "/api/hosts/" + created.ID)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("GET deleted host status = %d, want 404", resp.StatusCode)
 	}
 }
 

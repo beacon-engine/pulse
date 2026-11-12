@@ -29,7 +29,8 @@
         ? await fetchLogs(tail)
         : await api.getContainerLogs(hostId!, containerId!, tail);
     } catch (e) {
-      logs = `Error fetching logs: ${e}`;
+      const body = (e as any)?.response?.data;
+      logs = `Error fetching logs: ${typeof body === 'string' && body ? body : e}`;
     } finally {
       loading = false;
       // scroll to bottom after render

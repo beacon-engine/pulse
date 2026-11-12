@@ -58,7 +58,7 @@ Pulse is two Go binaries (agent + gateway) over a shared protocol package, plus 
 | :--- | :--- | :--- |
 | **Docker** | ✅ Full | containers, images, volumes, networks, logs, exec, compose stacks |
 | **Docker Swarm** | ✅ Full | services, nodes, force rolling update |
-| **Kubernetes** | 🟡 Partial | workloads (Deployments, StatefulSets, DaemonSets): scale, rolling restart · pods: per-container logs, delete · namespaces. In-cluster agent or kubeconfig — see [Kubernetes](#kubernetes) |
+| **Kubernetes** | 🟡 Partial | workloads (Deployments, StatefulSets, DaemonSets): scale, rolling restart · pods and containers: logs, inspect, delete · services, nodes, events. In-cluster agent or kubeconfig — see [Kubernetes](#kubernetes) |
 | **Podman** | 🟡 Partial | works via Podman's Docker-compatible socket for container/image/volume ops; no Swarm; compose needs `podman compose` |
 | **AWS ECS** | 🚧 Planned | Task Metadata Endpoint v4 & AWS SDK |
 | **HashiCorp Nomad**| 🚧 Planned | Nomad HTTP REST API (`/v1/allocations`) |
@@ -79,14 +79,15 @@ Swarm and Kubernetes locally in isolation to test these integrations.
 - [x] **Images / volumes / networks** — list, delete, prune, connect/disconnect
 - [x] **Compose stacks** — saved stacks, up/down, detected stacks
 - [x] **Docker Swarm** — services, nodes, force update
-- [x] **Kubernetes** — workloads (scale, rolling restart), pods (per-container logs, delete), namespaces
+- [x] **Kubernetes** — workloads (scale, rolling restart), pods and containers (logs, inspect, delete), services, nodes, events
 - [x] **Multi-host** — manage several Docker endpoints from one gateway
+- [x] **Push agents** — agents dial out to the gateway, auto-register as environments (many per gateway), and go offline / recover on heartbeat
 - [x] **Webhooks** — token-protected recreate / redeploy / swarm update / k8s rollout
 - [x] **Observability** — Prometheus `/metrics`, Prometheus proxy, live WebSocket events
 - [x] **Slack alerting** — container crash / OOM / lifecycle events
-- [x] **Event history** — SQLite via a `Repository` trait (swappable backend)
+- [x] **Event history** — SQLite behind a storage interface (swappable backend)
 - [x] **Authentication** — first-run admin setup, login/logout, DB-backed session cookies (Argon2), **admin/viewer roles** (viewers read-only), user management
-- [x] **Svelte dashboard** — containers, stacks, swarm, k8s, events, metrics, resources, users
+- [x] **Svelte dashboard** — containers, stacks, swarm, k8s, events, metrics, resources, settings (users today; the other sections are "coming soon" screens)
 
 ### 🚧 To implement
 
@@ -95,14 +96,24 @@ Swarm and Kubernetes locally in isolation to test these integrations.
   - [ ] **AWS ECS agentless driver** (Task Metadata v4 API parsing & CloudWatch integration)
   - [ ] **HashiCorp Nomad driver** (Nomad `/v1` API integration for job & allocation status)
   - [ ] **Serverless/Agentless sidecar mode** (Pushing metrics directly to Gateway for Fargate/Cloud Run)
-- [ ] **Security modules**
-  - [ ] **Encrypted gateway↔agent transport** (Noise protocol + one-time pairing token — see [Security](#authentication--security))
-  - [ ] `Secure` + TLS for session cookies in production
+- [ ] **Access control** (Settings → Access)
+  - [ ] **Roles & permissions** — custom roles beyond admin / viewer, built from a JSON permission catalog the gateway loads and serves to the dashboard, so the API checks and what the UI shows come from one source
   - [ ] Audit log of user actions
   - [ ] API tokens / SSO
+- [ ] **Alerts and notifications** (Settings → Monitoring)
+  - [ ] Metric alert rules (CPU / memory thresholds, restarting pods, unready workloads, NotReady nodes)
+  - [ ] Notification channels configured in the UI (Slack is env-only today; email, Teams, webhooks)
+- [ ] **Security scanning in the product** (Settings → Security)
+  - [ ] Scheduled / on-deploy image scans (Trivy) for running containers and workloads
+  - [ ] Vulnerability findings with notices when new ones appear
+- [ ] **Security modules**
+  - [ ] **Agent enrollment** — one-time join tokens and per-agent, revocable credentials ([design](docs/AGENT_ENROLLMENT.md))
+  - [ ] **Authenticated, encrypted pull-mode agents** (pull agents accept any caller today — see [Security](#authentication--security))
+  - [ ] `Secure` session cookie + TLS by default in production
 - [ ] GitOps reconciliation with drift detection
-- [ ] Advanced Kubernetes (exec, events, Services/Ingress, YAML view/edit, namespace-scoped agents)
-- [ ] Multi-agent fleet management (many agents behind one gateway)
+- [ ] Advanced Kubernetes (exec, Ingress, ConfigMaps, YAML view/edit, CPU/memory usage via metrics-server, namespace-scoped agents)
+- [ ] Fleet management across agents (tags / groups, bulk actions, agent versions and upgrades)
+- [ ] Collapsible sidebar for small screens
 - [ ] OpenTelemetry tracing + Grafana dashboard templates
 - [ ] High availability, backup/restore
 
@@ -285,6 +296,11 @@ How it stays correct:
 - **Heartbeat.** The agent calls home every `PULSE_HEARTBEAT_INTERVAL`; a
   missed-heartbeat backstop marks an environment offline even if the socket
   half-opens without a clean close.
+- **Keepalive and reconnect.** Both ends ping each other every 20 s and drop
+  the session when a pong doesn't arrive within 10 s, so a link that dies
+  silently (network drop, crashed host) is noticed in about 30 s instead of
+  whenever TCP gives up. The agent then reconnects with a jittered backoff
+  (1 s, doubling to 30 s while the gateway stays unreachable).
 - **Scale-down vs. outage.** On a clean shutdown (SIGTERM — how ECS/K8s/Karpenter
   stop a task) the agent sends a *deregister* first, so it goes offline
   **silently**. An abrupt drop with no deregister alerts (Slack, if configured)
@@ -292,6 +308,9 @@ How it stays correct:
   stay quiet.
 - **Retention.** Offline auto-registered environments are kept as history, then
   hard-deleted once the retention window elapses.
+- **Pull agents.** An environment added by agent address never calls home, so
+  the gateway pings its agent every 30 s and marks it offline / online from the
+  result. It alerts after the same grace window, but is never deleted.
 
 The three windows are **gateway settings** (DB-backed, editable at runtime via
 `GET`/`PUT /api/settings`; a settings page is planned) — not env vars:
@@ -416,13 +435,20 @@ kubectl apply -f deploy/kubernetes/agent-push.yaml
 kubectl apply -f deploy/kubernetes/examples/demo-workloads.yaml
 ```
 
-Pick the new environment in the selector and open **Kubernetes**:
+Pick the new environment in the selector and open **Kubernetes**. The header
+shows the cluster's Kubernetes version, API server and how Pulse reaches it:
+**Push agent** (the agent dials the gateway) or **Pull agent** (the gateway
+dials the agent). Below it are health counts, then one tab per kind of object.
+The filter box and namespace selector apply to every tab.
 
-| Section | What you can do |
+| Tab | What you can do |
 |---|---|
-| **Workloads** | Deployments, StatefulSets and DaemonSets with ready/desired counts. Scale with − / + (Deployments, StatefulSets), or start a rolling restart (all three kinds). |
-| **Pods** | Owner, node, status, age. Expand a pod to see its containers (state, restarts) and read each container's **logs**. Delete a pod and its controller replaces it. |
-| **Namespaces** | Pod count per namespace; click one (or use the filter) to narrow the page. |
+| **Workloads** | Deployments, StatefulSets and DaemonSets with ready/desired counts. Scale with − / + (Deployments, StatefulSets), start a rolling restart (all three kinds), or jump to the workload's pods. |
+| **Pods** | Status as `kubectl get pods` shows it (CrashLoopBackOff, Terminating, …), ready containers, restarts, controller, node, age. Expand a pod to see its containers; inspect it for placement, labels, resources and its events. Delete a pod and its controller replaces it. |
+| **Containers** | Every pod container, laid out like the Docker containers page: status, pod, ports, restarts, **logs**, inspect, and restart (which replaces the pod). Filter to the ones restarting or not ready. |
+| **Services** | Type, cluster IP, external address, ports (`port:nodePort→target`) and selector. |
+| **Nodes** | Ready state, roles, kubelet version, OS / arch / runtime, CPU, memory, and pods running against capacity. Pressure conditions and cordoned nodes are flagged. |
+| **Events** | The cluster's newest 300 events (Kubernetes keeps about an hour), with a Warnings filter. Click a pod to inspect it. |
 
 You manage containers in Kubernetes **through their workload**, not one by one.
 There is no "stop container": the kubelet would just start it again. To stop
@@ -452,19 +478,32 @@ they're only visible on the Kubernetes page.
 - **Login** issues an opaque, DB-backed session token in an `HttpOnly` cookie
   (`pulse_session`, 7-day expiry). Passwords are hashed with **Argon2**.
 - **Roles**: `admin` (full access + user management) and `viewer` (read-only —
-  any state-changing request is rejected with `403`).
-- **User management** at `/api/users` (admin only), with guards against deleting
-  the last admin or your own account.
+  any state-changing request is rejected with `403`). Custom roles are planned
+  (Settings → Roles & permissions).
+- **User management** in **Settings → Users** (API: `/api/users`, admin only),
+  with guards against deleting the last admin or your own account.
 
 > **Production TLS note:** the session cookie is **not** marked `Secure` so it
 > works over plain HTTP in local/dev. Put the gateway behind TLS (or a
 > TLS-terminating proxy) in production and flip it on — it's a one-line change in
-> **`gateway/src/auth.rs`**, in the `session_cookie()` function (add
-> `cookie.set_secure(true);`).
+> **`internal/gateway/auth.go`**, in `setSessionCookie` (add `Secure: true`).
+
+### Gateway↔agent connection (today)
+
+| Mode | Authentication | Encryption |
+|---|---|---|
+| **Push** (agent dials `/agent/ws`) | The agent sends a bearer token from `PULSE_AGENT_TOKENS` on the WebSocket upgrade; unknown tokens are rejected. The agent does **not** verify which gateway it reached beyond TLS. | Only with `wss://`: serve the gateway over TLS (`PULSE_TLS_CERT` / `PULSE_TLS_KEY`, or a TLS proxy). With `ws://`, the token and all traffic travel in plaintext. |
+| **Pull** (gateway dials the agent, TCP or `ws://`) | **None.** Anyone who can reach the agent's port can drive it, and with a Docker socket that means root on the host. | None over TCP; `wss://` only if you put TLS in front of the agent. |
+
+So: use push mode with a `wss://` gateway URL anywhere the network isn't fully
+trusted, and never expose a pull agent's port beyond a private network (the
+Docker Compose setup keeps `agent:9000` on the internal compose network only).
+Agent enrollment ([design](docs/AGENT_ENROLLMENT.md)) replaces shared tokens
+with per-agent revocable credentials.
 
 ### Encrypted gateway↔agent transport (planned)
 
-Today the gateway↔agent TCP link is **unencrypted**. The planned design:
+The planned design for authenticating and encrypting every link, including pull mode:
 
 - On first boot each side generates a long-lived keypair (persisted).
 - The **first handshake** exchanges public keys and pins them (Trust On First
@@ -570,7 +609,7 @@ require the `admin` role.
 | GET | `/api/hosts/:id/{images,volumes,networks,system,hardware}` | Host resources |
 | GET/POST | `/api/hosts/:id/stacks` · `/api/stacks/:id/{up,down}` | Compose stacks |
 | GET | `/api/hosts/:id/swarm/{services,nodes}` | Docker Swarm |
-| GET | `/api/hosts/:id/k8s/{pods,namespaces,workloads}` | Kubernetes |
+| GET | `/api/hosts/:id/k8s/{pods,namespaces,workloads,nodes,services,events}` | Kubernetes |
 | GET | `/api/hosts/:id/k8s/pods/:ns/:pod/logs?container=&tail=` | Pod container logs |
 | POST | `/api/hosts/:id/k8s/workloads/:ns/:kind/:name/{scale?replicas=N,restart}` | Scale / rolling restart |
 | DELETE | `/api/hosts/:id/k8s/pods/:ns/:pod` | Delete a pod |

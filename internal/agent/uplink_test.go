@@ -118,7 +118,7 @@ func TestUplinkDeregistersOnShutdown(t *testing.T) {
 	}
 	done := make(chan struct{})
 	st := NewState(Config{Mode: ModeDial, InstanceID: cfg.InstanceID})
-	go func() { _ = dialAndServe(ctx, st, cfg); close(done) }()
+	go func() { _, _ = dialAndServe(ctx, st, cfg); close(done) }()
 
 	select {
 	case <-connected:
@@ -139,5 +139,52 @@ func TestUplinkDeregistersOnShutdown(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("uplink did not exit after shutdown")
+	}
+}
+
+// A gateway that stops answering pings (a silently dead link) makes the agent
+// drop the session, so its run loop can reconnect.
+func TestUplinkDropsSessionWhenPingsGoUnanswered(t *testing.T) {
+	defer func(i, to time.Duration) { pingInterval, pingTimeout = i, to }(pingInterval, pingTimeout)
+	pingInterval, pingTimeout = 50*time.Millisecond, 100*time.Millisecond
+
+	release := make(chan struct{})
+	defer close(release)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		<-release // never reads, so never answers a ping
+	}))
+	defer srv.Close()
+
+	type result struct {
+		connected bool
+		err       error
+	}
+	done := make(chan result, 1)
+	st := NewState(Config{Mode: ModeDial})
+	go func() {
+		connected, err := dialAndServe(context.Background(), st, Config{GatewayURL: "ws" + strings.TrimPrefix(srv.URL, "http")})
+		done <- result{connected, err}
+	}()
+
+	select {
+	case r := <-done:
+		if !r.connected || r.err == nil {
+			t.Errorf("dialAndServe = (%t, %v), want (true, error)", r.connected, r.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("agent kept a session whose pings went unanswered")
+	}
+}
+
+func TestJitterStaysInRange(t *testing.T) {
+	for range 1000 {
+		if d := jitter(4 * time.Second); d < 2*time.Second || d > 4*time.Second {
+			t.Fatalf("jitter(4s) = %s, want within [2s, 4s]", d)
+		}
 	}
 }

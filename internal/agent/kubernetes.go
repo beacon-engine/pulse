@@ -177,6 +177,42 @@ func handleK8sWorkloads(ctx context.Context, st *State) protocol.Response {
 	return protocol.RespWorkloads(ws)
 }
 
+func handleK8sNodes(ctx context.Context, st *State) protocol.Response {
+	cs, err := st.K8s.Client()
+	if err != nil {
+		return k8sUnavailable(err)
+	}
+	nodes, err := listNodes(ctx, cs)
+	if err != nil {
+		return k8sError(err)
+	}
+	return protocol.RespNodes(nodes)
+}
+
+func handleK8sServices(ctx context.Context, st *State) protocol.Response {
+	cs, err := st.K8s.Client()
+	if err != nil {
+		return k8sUnavailable(err)
+	}
+	svcs, err := listServices(ctx, cs)
+	if err != nil {
+		return k8sError(err)
+	}
+	return protocol.RespServices(svcs)
+}
+
+func handleK8sEvents(ctx context.Context, st *State) protocol.Response {
+	cs, err := st.K8s.Client()
+	if err != nil {
+		return k8sUnavailable(err)
+	}
+	events, err := listEvents(ctx, cs)
+	if err != nil {
+		return k8sError(err)
+	}
+	return protocol.RespK8sEvents(events)
+}
+
 func handleK8sPodLogs(ctx context.Context, st *State, namespace, name, container string, tail uint32) protocol.Response {
 	cs, err := st.K8s.Client()
 	if err != nil {
@@ -277,37 +313,131 @@ func mapPod(pod *corev1.Pod) protocol.PodInfo {
 		}
 	}
 
+	specs := make(map[string]corev1.Container, len(pod.Spec.Containers))
+	for _, c := range pod.Spec.Containers {
+		specs[c.Name] = c
+	}
 	containers := make([]protocol.PodContainer, 0, len(pod.Status.ContainerStatuses))
 	for _, cs := range pod.Status.ContainerStatuses {
-		state := "unknown"
-		switch {
-		case cs.State.Running != nil:
-			state = "running"
-		case cs.State.Terminated != nil:
-			state = "terminated"
-		case cs.State.Waiting != nil:
-			state = "waiting"
+		c := mapContainerStatus(cs)
+		if spec, ok := specs[cs.Name]; ok {
+			c.Ports = containerPorts(spec)
+			c.Resources = containerResources(spec)
 		}
-		containers = append(containers, protocol.PodContainer{
-			Name:         cs.Name,
-			Image:        cs.Image,
-			Ready:        cs.Ready,
-			RestartCount: cs.RestartCount,
-			State:        state,
-		})
+		containers = append(containers, c)
 	}
 
 	return protocol.PodInfo{
 		Name:       pod.Name,
 		Namespace:  pod.Namespace,
 		Status:     phase,
+		Reason:     podReason(pod),
 		Ready:      ready,
 		Containers: containers,
 		Node:       pod.Spec.NodeName,
 		IP:         pod.Status.PodIP,
 		Created:    timestamp(pod.CreationTimestamp),
 		Owner:      podOwner(pod),
+		Labels:     pod.Labels,
+		QOSClass:   string(pod.Status.QOSClass),
 	}
+}
+
+func mapContainerStatus(cs corev1.ContainerStatus) protocol.PodContainer {
+	c := protocol.PodContainer{
+		Name:         cs.Name,
+		Image:        cs.Image,
+		Ready:        cs.Ready,
+		RestartCount: cs.RestartCount,
+		State:        "unknown",
+		ContainerID:  cs.ContainerID,
+	}
+	switch s := cs.State; {
+	case s.Running != nil:
+		c.State = "running"
+		c.Started = timestamp(s.Running.StartedAt)
+	case s.Terminated != nil:
+		c.State = "terminated"
+		c.Reason, c.Message = s.Terminated.Reason, s.Terminated.Message
+		code := s.Terminated.ExitCode
+		c.ExitCode = &code
+		c.Started = timestamp(s.Terminated.FinishedAt)
+	case s.Waiting != nil:
+		c.State = "waiting"
+		c.Reason, c.Message = s.Waiting.Reason, s.Waiting.Message
+	}
+	if last := cs.LastTerminationState.Terminated; last != nil {
+		c.LastReason = last.Reason
+		code := last.ExitCode
+		c.LastExitCode = &code
+	}
+	return c
+}
+
+func containerPorts(c corev1.Container) []protocol.PodPort {
+	if len(c.Ports) == 0 {
+		return nil
+	}
+	ports := make([]protocol.PodPort, 0, len(c.Ports))
+	for _, p := range c.Ports {
+		proto := string(p.Protocol)
+		if proto == "" {
+			proto = "TCP"
+		}
+		ports = append(ports, protocol.PodPort{Name: p.Name, ContainerPort: p.ContainerPort, Protocol: proto})
+	}
+	return ports
+}
+
+func containerResources(c corev1.Container) *protocol.PodResources {
+	r := protocol.PodResources{
+		CPURequest:    quantity(c.Resources.Requests, corev1.ResourceCPU),
+		CPULimit:      quantity(c.Resources.Limits, corev1.ResourceCPU),
+		MemoryRequest: quantity(c.Resources.Requests, corev1.ResourceMemory),
+		MemoryLimit:   quantity(c.Resources.Limits, corev1.ResourceMemory),
+	}
+	if r == (protocol.PodResources{}) {
+		return nil
+	}
+	return &r
+}
+
+func quantity(list corev1.ResourceList, name corev1.ResourceName) string {
+	if q, ok := list[name]; ok {
+		return q.String()
+	}
+	return ""
+}
+
+// podReason is the status `kubectl get pods` prints when the phase alone is
+// misleading: a "Running" pod whose container is in CrashLoopBackOff, a pod
+// being deleted, or a finished one. Empty when the phase says it all.
+func podReason(pod *corev1.Pod) string {
+	if pod.DeletionTimestamp != nil {
+		return "Terminating"
+	}
+	for _, cs := range pod.Status.InitContainerStatuses {
+		if w := cs.State.Waiting; w != nil && w.Reason != "" && w.Reason != "PodInitializing" {
+			return "Init:" + w.Reason
+		}
+		if t := cs.State.Terminated; t != nil && t.ExitCode != 0 {
+			return "Init:Error"
+		}
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if w := cs.State.Waiting; w != nil && w.Reason != "" {
+			return w.Reason
+		}
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if t := cs.State.Terminated; t != nil && t.Reason != "" && pod.Status.Phase != corev1.PodRunning {
+			return t.Reason
+		}
+	}
+	if pod.Status.Reason != "" {
+		return pod.Status.Reason // e.g. Evicted
+	}
+	return ""
 }
 
 // podOwner names the workload that manages a pod. A Deployment's pods are owned
@@ -348,6 +478,180 @@ func listNamespaces(ctx context.Context, cs *kubernetes.Clientset) ([]protocol.N
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
 	return result, nil
+}
+
+func listNodes(ctx context.Context, cs kubernetes.Interface) ([]protocol.NodeInfo, error) {
+	list, err := cs.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]protocol.NodeInfo, 0, len(list.Items))
+	for i := range list.Items {
+		result = append(result, mapNode(&list.Items[i]))
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result, nil
+}
+
+const nodeRolePrefix = "node-role.kubernetes.io/"
+
+func mapNode(n *corev1.Node) protocol.NodeInfo {
+	info := protocol.NodeInfo{
+		Name:             n.Name,
+		Status:           "Unknown",
+		Unschedulable:    n.Spec.Unschedulable,
+		Roles:            []string{},
+		Version:          n.Status.NodeInfo.KubeletVersion,
+		OSImage:          n.Status.NodeInfo.OSImage,
+		KernelVersion:    n.Status.NodeInfo.KernelVersion,
+		Arch:             n.Status.NodeInfo.Architecture,
+		ContainerRuntime: n.Status.NodeInfo.ContainerRuntimeVersion,
+		CPU:              quantity(n.Status.Capacity, corev1.ResourceCPU),
+		Memory:           quantity(n.Status.Capacity, corev1.ResourceMemory),
+		Pods:             quantity(n.Status.Capacity, corev1.ResourcePods),
+		AllocCPU:         quantity(n.Status.Allocatable, corev1.ResourceCPU),
+		AllocMemory:      quantity(n.Status.Allocatable, corev1.ResourceMemory),
+		Created:          timestamp(n.CreationTimestamp),
+	}
+	for label := range n.Labels {
+		if role, ok := strings.CutPrefix(label, nodeRolePrefix); ok && role != "" {
+			info.Roles = append(info.Roles, role)
+		}
+	}
+	sort.Strings(info.Roles)
+	for _, c := range n.Status.Conditions {
+		switch {
+		case c.Type == corev1.NodeReady:
+			switch c.Status {
+			case corev1.ConditionTrue:
+				info.Status = "Ready"
+			case corev1.ConditionFalse:
+				info.Status = "NotReady"
+			}
+		case c.Status == corev1.ConditionTrue:
+			info.Pressure = append(info.Pressure, string(c.Type))
+		}
+	}
+	for _, a := range n.Status.Addresses {
+		if a.Type == corev1.NodeInternalIP {
+			info.InternalIP = a.Address
+			break
+		}
+	}
+	return info
+}
+
+func listServices(ctx context.Context, cs kubernetes.Interface) ([]protocol.ServiceInfo, error) {
+	list, err := cs.CoreV1().Services(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]protocol.ServiceInfo, 0, len(list.Items))
+	for i := range list.Items {
+		result = append(result, mapService(&list.Items[i]))
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Namespace != result[j].Namespace {
+			return result[i].Namespace < result[j].Namespace
+		}
+		return result[i].Name < result[j].Name
+	})
+	return result, nil
+}
+
+func mapService(svc *corev1.Service) protocol.ServiceInfo {
+	info := protocol.ServiceInfo{
+		Name:      svc.Name,
+		Namespace: svc.Namespace,
+		Type:      string(svc.Spec.Type),
+		ClusterIP: svc.Spec.ClusterIP,
+		Ports:     make([]protocol.ServicePort, 0, len(svc.Spec.Ports)),
+		Selector:  svc.Spec.Selector,
+		Created:   timestamp(svc.CreationTimestamp),
+	}
+	if info.Type == "" {
+		info.Type = string(corev1.ServiceTypeClusterIP)
+	}
+	for _, ing := range svc.Status.LoadBalancer.Ingress {
+		if ing.Hostname != "" {
+			info.External = append(info.External, ing.Hostname)
+		} else if ing.IP != "" {
+			info.External = append(info.External, ing.IP)
+		}
+	}
+	info.External = append(info.External, svc.Spec.ExternalIPs...)
+	if svc.Spec.ExternalName != "" {
+		info.External = append(info.External, svc.Spec.ExternalName)
+	}
+	for _, p := range svc.Spec.Ports {
+		proto := string(p.Protocol)
+		if proto == "" {
+			proto = "TCP"
+		}
+		info.Ports = append(info.Ports, protocol.ServicePort{
+			Name: p.Name, Protocol: proto, Port: p.Port,
+			TargetPort: p.TargetPort.String(), NodePort: p.NodePort,
+		})
+	}
+	return info
+}
+
+// maxEvents caps the events returned: the newest, which are the ones worth reading.
+const maxEvents = 300
+
+func listEvents(ctx context.Context, cs kubernetes.Interface) ([]protocol.EventInfo, error) {
+	list, err := cs.CoreV1().Events(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	type seen struct {
+		info protocol.EventInfo
+		at   time.Time
+	}
+	all := make([]seen, 0, len(list.Items))
+	for i := range list.Items {
+		e := &list.Items[i]
+		at := eventTime(e)
+		count := e.Count
+		if e.Series != nil && e.Series.Count > count {
+			count = e.Series.Count
+		}
+		if count == 0 {
+			count = 1
+		}
+		source := e.Source.Component
+		if source == "" {
+			source = e.ReportingController
+		}
+		all = append(all, seen{at: at, info: protocol.EventInfo{
+			Namespace: e.Namespace, Type: e.Type, Reason: e.Reason, Message: strings.TrimSpace(e.Message),
+			ObjectKind: e.InvolvedObject.Kind, ObjectName: e.InvolvedObject.Name,
+			Count: count, LastSeen: timestamp(metav1.NewTime(at)), Source: source,
+		}})
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].at.After(all[j].at) })
+	if len(all) > maxEvents {
+		all = all[:maxEvents]
+	}
+	result := make([]protocol.EventInfo, len(all))
+	for i, e := range all {
+		result[i] = e.info
+	}
+	return result, nil
+}
+
+// eventTime is when an event last happened; which field holds it depends on
+// whether it was written through the old core/v1 or the newer events.k8s.io API.
+func eventTime(e *corev1.Event) time.Time {
+	switch {
+	case e.Series != nil && !e.Series.LastObservedTime.IsZero():
+		return e.Series.LastObservedTime.Time
+	case !e.LastTimestamp.IsZero():
+		return e.LastTimestamp.Time
+	case !e.EventTime.IsZero():
+		return e.EventTime.Time
+	}
+	return e.CreationTimestamp.Time
 }
 
 // maxScaleReplicas caps a scale request so a typo can't ask for 10000 pods.
