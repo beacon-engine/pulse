@@ -3,7 +3,6 @@
   import { api } from '../lib/api';
   import { hostsStore } from '../stores/hosts.svelte';
   import { toast } from '../lib/toast.svelte';
-  import { navigate } from '../lib/router';
   import Pagination from '../components/Pagination.svelte';
   import AddEnvironmentModal from '../components/AddEnvironmentModal.svelte';
   import { RUNTIME_LABEL, type Environment } from '../types/environments';
@@ -62,8 +61,7 @@
   }
 
   async function select(host: Environment) {
-    hostsStore.switchHost(host);
-    navigate('containers');
+    hostsStore.switchHost(host, 'dashboard');
   }
 
   async function rename(host: Environment) {

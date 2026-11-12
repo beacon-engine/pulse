@@ -10,8 +10,15 @@ class SwarmStore extends PollingStore {
   loading = $state(false);
   error = $state("");
 
+  protected reset() {
+    this.services = [];
+    this.nodes = [];
+    this.selectedService = null;
+    this.error = "";
+  }
+
   async refresh() {
-    const hostId = hostsStore.activeHostId;
+    const hostId = this.beginLoad();
     if (!hostId) return;
 
     if (this.services.length === 0) {
@@ -24,6 +31,7 @@ class SwarmStore extends PollingStore {
         api.getSwarmServices(hostId),
         api.getSwarmNodes(hostId),
       ]);
+      if (this.stale(hostId)) return;
       this.services = s;
       this.nodes = n;
 
@@ -32,9 +40,10 @@ class SwarmStore extends PollingStore {
         if (updated) this.selectedService = updated;
       }
     } catch (err: any) {
+      if (this.stale(hostId)) return;
       this.error = err?.response?.data ?? String(err);
     } finally {
-      this.loading = false;
+      if (!this.stale(hostId)) this.loading = false;
     }
   }
 

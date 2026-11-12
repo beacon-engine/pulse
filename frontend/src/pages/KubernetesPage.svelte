@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { kubernetesStore, type K8sSection } from "../stores/kubernetes.svelte";
   import { hostsStore } from "../stores/hosts.svelte";
   import { api } from "../lib/api";
@@ -18,16 +18,19 @@
     podStatus,
   } from "../utils/k8s";
 
+  // Reload as soon as the environment changes, not at the next poll.
+  $effect(() => {
+    if (!hostsStore.activeHostId) return;
+    untrack(() => kubernetesStore.startPolling(15000));
+    return () => kubernetesStore.stopPolling();
+  });
+
   onMount(() => {
-    kubernetesStore.startPolling(15000);
     // Keep the Connected / Offline badge current.
     const statusTimer = setInterval(() => {
       if (document.visibilityState === "visible") void hostsStore.refreshActive();
     }, 15000);
-    return () => {
-      kubernetesStore.stopPolling();
-      clearInterval(statusTimer);
-    };
+    return () => clearInterval(statusTimer);
   });
 
   type Tab = "workloads" | "pods" | "containers" | "services" | "nodes" | "events";

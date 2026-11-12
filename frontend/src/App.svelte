@@ -9,6 +9,7 @@
   import ToastContainer from "./components/ToastContainer.svelte";
   import RuntimeUnavailable from "./components/RuntimeUnavailable.svelte";
 
+  import DashboardPage from "./pages/DashboardPage.svelte";
   import SettingsPage from "./pages/SettingsPage.svelte";
   import HostsPage from "./pages/HostsPage.svelte";
   import ContainersPage from "./pages/ContainersPage.svelte";
@@ -24,6 +25,7 @@
   import { currentEnv, currentRoute, initRouter, navigate, type Route } from "./lib/router";
   import { hostsStore } from "./stores/hosts.svelte";
   import { containersStore } from "./stores/container.svelte";
+  import { dashboardStore } from "./stores/dashboard.svelte";
   import { swarmStore } from "./stores/swarm.svelte";
   import { loadingStore } from "./stores/loading.svelte";
   import { toast } from "./lib/toast.svelte";
@@ -47,7 +49,7 @@
   let wsDisconnect: (() => void) | null = null;
 
   // ── Navigation ────────────────────────────────────────────────────────────
-  let route = $state<Route>("containers");
+  let route = $state<Route>("dashboard");
   currentRoute.subscribe((r) => {
     route = r;
     loadingStore.reset(); // Reset in-flight loader counter on route transitions
@@ -57,6 +59,11 @@
   type NavItem = { id: Route; label: string; icon: string; requires?: Requirement };
 
   const NAV: NavItem[] = [
+    {
+      id: "dashboard",
+      label: "Dashboard",
+      icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="8" height="10" rx="1.5"/><rect x="13" y="3" width="8" height="6" rx="1.5"/><rect x="13" y="11" width="8" height="10" rx="1.5"/><rect x="3" y="15" width="8" height="6" rx="1.5"/></svg>`,
+    },
     {
       id: "containers",
       requires: "containers",
@@ -116,15 +123,14 @@
 
   let routeRequirement = $derived(NAV.find((n) => n.id === route)?.requires);
 
-  // Switching to an environment that can't back the current page moves to the
-  // first page it can (e.g. Containers → Kubernetes for a cluster agent). An
-  // unreachable agent stays put so the explanation panel is shown instead.
+  // An environment that can't back the current page (a page opened from a link
+  // or the back button) moves to its dashboard. An unreachable agent stays put
+  // so the explanation panel is shown instead.
   $effect(() => {
     const caps = hostsStore.activeCapabilities;
     if (!caps?.reachable || !routeRequirement) return;
     if (hostsStore.supports(routeRequirement)) return;
-    const next = NAV.find((n) => n.requires && hostsStore.supports(n.requires));
-    navigate(next?.id ?? "events");
+    navigate("dashboard");
   });
 
   // ── Modals ────────────────────────────────────────────────────────────────
@@ -160,8 +166,10 @@
   }
 
   // ── Host Actions ──────────────────────────────────────────────────────────
+  // Changing environment always lands on its dashboard, so nothing from the
+  // previous environment's page is left on screen.
   async function handleSwitchHost(host: Environment) {
-    hostsStore.switchHost(host);
+    hostsStore.switchHost(host, "dashboard");
   }
 
   async function handleRenameHost(id: string, name: string) {
@@ -197,9 +205,11 @@
     }
   }
 
+  // A fresh sign-in lands on the dashboard; reloading a signed-in page stays put.
   async function onAuthed(u: Account) {
     account = u;
     authReady = true;
+    navigate("dashboard");
     await boot();
   }
 
@@ -211,7 +221,7 @@
     }
     teardown();
     account = null;
-    if (route === "users" || route === "settings") navigate("containers");
+    if (route === "users" || route === "settings") navigate("dashboard");
   }
 
   onMount(() => {
@@ -471,7 +481,7 @@
             </svg>
           {/if}
         </button>
-        <button class="icon-btn" onclick={() => containersStore.refresh()} title="Refresh">
+        <button class="icon-btn" onclick={() => (route === "dashboard" ? dashboardStore.refresh() : containersStore.refresh())} title="Refresh">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
             <path d="M3 12a9 9 0 1 0 2.6-6.4L3 8" />
             <path d="M3 3v5h5" />
@@ -483,6 +493,8 @@
       <div class="content">
         {#if routeRequirement && !hostsStore.supports(routeRequirement)}
           <RuntimeUnavailable requirement={routeRequirement} />
+        {:else if route === "dashboard"}
+          <DashboardPage />
         {:else if route === "containers"}
           <ContainersPage />
         {:else if route === "stacks"}

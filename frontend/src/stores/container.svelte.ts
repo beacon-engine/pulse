@@ -12,9 +12,18 @@ class ContainersStore extends PollingStore {
   selectedContainer = $state<Container | null>(null);
   loading = $state(false);
   error = $state("");
+  runningCount = $derived(this.containers.filter((c) => c.state === "running").length);
+
+  protected reset() {
+    this.containers = [];
+    this.stacks = [];
+    this.savedStacks = [];
+    this.selectedContainer = null;
+    this.error = "";
+  }
 
   async refresh() {
-    const hostId = hostsStore.activeHostId;
+    const hostId = this.beginLoad();
     if (!hostId) return;
 
     if (this.containers.length === 0) {
@@ -29,6 +38,7 @@ class ContainersStore extends PollingStore {
         api.getSavedStacks(hostId),
         api.getEvents(),
       ]);
+      if (this.stale(hostId)) return;
       this.containers = c;
       this.stacks = d;
       this.savedStacks = s;
@@ -40,10 +50,11 @@ class ContainersStore extends PollingStore {
         if (updated) this.selectedContainer = updated;
       }
     } catch (err: any) {
+      if (this.stale(hostId)) return;
       this.error = err?.response?.data ?? String(err);
       toast.error(this.error);
     } finally {
-      this.loading = false;
+      if (!this.stale(hostId)) this.loading = false;
     }
   }
 
