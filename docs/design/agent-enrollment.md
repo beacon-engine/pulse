@@ -1,7 +1,7 @@
 # Design: Agent enrollment (UI-driven install + per-agent credentials)
 
 **Status:** Draft for review · **Scope:** how an agent gets connected to a gateway
-and how it authenticates afterwards. Builds on [push-pull-transport.md](push-pull-transport.md); the
+and how it authenticates afterwards. Builds on the push and pull transports ([architecture](../architecture.md)); the
 request/response protocol is unchanged.
 
 ## Summary
