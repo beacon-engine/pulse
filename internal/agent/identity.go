@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/moby/moby/client"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -125,11 +126,11 @@ func (st *State) identitySources() identitySources {
 			if err != nil {
 				return "", err
 			}
-			info, err := cli.Info(ctx)
+			res, err := cli.Info(ctx, client.InfoOptions{})
 			if err != nil {
 				return "", err
 			}
-			return info.ID, nil
+			return res.Info.ID, nil
 		},
 	}
 }

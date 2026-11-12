@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
+  import { webhookUrl as fullWebhookUrl } from '../lib/webhooks';
+  import WebhookUrl from './WebhookUrl.svelte';
   import type { Container, ContainerDetail, ContainerNetworkInfo, ContainerPort, HostNetwork } from '../types/containers';
 
   let {
@@ -267,11 +269,10 @@
   }
 
   function webhookUrl(): string {
-    return `${window.location.origin}/api/webhooks/${hostId}/containers/${containerKey}/deploy?token=${webhookToken}&pull=true`;
-  }
-
-  function copyWebhookUrl() {
-    navigator.clipboard.writeText(webhookUrl());
+    return fullWebhookUrl(`${hostId}/containers/${encodeURIComponent(containerKey)}/deploy`, {
+      token: webhookToken ?? '',
+      pull: 'true',
+    });
   }
 
   onMount(() => { loadDetail(); loadWebhookToken(); });
@@ -388,10 +389,9 @@
         {#if webhookToken}
           <div class="webhook-enabled-row">
             <span class="webhook-active-badge">active</span>
-            <code class="webhook-url-sm">{webhookUrl().replace(window.location.origin, '')}</code>
           </div>
+          <WebhookUrl url={webhookUrl()} />
           <div class="webhook-ctrl-row">
-            <button class="wh-btn" onclick={copyWebhookUrl} disabled={webhookBusy}>Copy URL</button>
             <button class="wh-btn" onclick={rotateWebhook} disabled={webhookBusy}>Rotate</button>
             <button class="wh-btn wh-btn-danger" onclick={disableWebhook} disabled={webhookBusy}>Disable</button>
           </div>
@@ -732,11 +732,6 @@
   .webhook-active-badge {
     font-size: 10px; font-weight: 800; text-transform: uppercase; background: var(--green-tint);
     color: var(--green); padding: 2px 7px; border-radius: 20px; flex-shrink: 0;
-  }
-  .webhook-url-sm {
-    font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: var(--mist);
-    background: var(--surface); padding: 3px 8px; border-radius: 4px;
-    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
   }
   .webhook-ctrl-row { display: flex; gap: 6px; margin-top: 6px; }
   .wh-btn {

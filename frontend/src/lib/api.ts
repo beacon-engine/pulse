@@ -268,7 +268,14 @@ export class PulseClient {
     const { data } = await this.http.get<ContainerDetail>(
       `/hosts/${hostId}/containers/${containerId}/inspect`,
     );
-    return data;
+    // Agents before 0.1.1 send null for an empty list.
+    return {
+      ...data,
+      ports: data.ports ?? [],
+      mounts: data.mounts ?? [],
+      env: data.env ?? [],
+      cmd: data.cmd ?? [],
+    };
   }
 
   async inspectRawContainer(
@@ -643,7 +650,7 @@ export class PulseClient {
     entityKey: string,
   ): Promise<{ enabled: boolean; token: string | null }> {
     const { data } = await this.http.get(
-      `/webhooks/${hostId}/${entityType}/${entityKey}/token`,
+      `/webhooks/${hostId}/${entityType}/${encodeURIComponent(entityKey)}/token`,
     );
     return data;
   }
@@ -654,7 +661,7 @@ export class PulseClient {
     entityKey: string,
   ): Promise<{ token: string }> {
     const { data } = await this.http.post(
-      `/webhooks/${hostId}/${entityType}/${entityKey}/token`,
+      `/webhooks/${hostId}/${entityType}/${encodeURIComponent(entityKey)}/token`,
     );
     return data;
   }
@@ -665,7 +672,7 @@ export class PulseClient {
     entityKey: string,
   ): Promise<void> {
     await this.http.delete(
-      `/webhooks/${hostId}/${entityType}/${entityKey}/token`,
+      `/webhooks/${hostId}/${entityType}/${encodeURIComponent(entityKey)}/token`,
     );
   }
 
