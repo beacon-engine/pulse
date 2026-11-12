@@ -650,7 +650,7 @@ export class PulseClient {
     entityKey: string,
   ): Promise<{ enabled: boolean; token: string | null }> {
     const { data } = await this.http.get(
-      `/webhooks/${hostId}/${entityType}/${entityKey}/token`,
+      `/webhooks/${hostId}/${entityType}/${encodeURIComponent(entityKey)}/token`,
     );
     return data;
   }
@@ -661,7 +661,7 @@ export class PulseClient {
     entityKey: string,
   ): Promise<{ token: string }> {
     const { data } = await this.http.post(
-      `/webhooks/${hostId}/${entityType}/${entityKey}/token`,
+      `/webhooks/${hostId}/${entityType}/${encodeURIComponent(entityKey)}/token`,
     );
     return data;
   }
@@ -672,7 +672,7 @@ export class PulseClient {
     entityKey: string,
   ): Promise<void> {
     await this.http.delete(
-      `/webhooks/${hostId}/${entityType}/${entityKey}/token`,
+      `/webhooks/${hostId}/${entityType}/${encodeURIComponent(entityKey)}/token`,
     );
   }
 

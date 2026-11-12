@@ -11,6 +11,10 @@
   (read-only: any change is refused with `403`). Custom roles are planned.
 - **Users** are managed in **Settings → Users**, which won't let you delete the
   last admin or your own account.
+- **Webhooks:** each action URL carries its own random token and works
+  without a session, so treat the URL as a secret: keep it in your CI's secret
+  store, and rotate it from the dashboard if it leaks. A token only works for
+  the one container, stack, service or workload it was made for.
 
 **Before exposing Pulse:** the session cookie isn't marked `Secure`, so that
 local development works over plain HTTP. In production, serve Pulse over HTTPS

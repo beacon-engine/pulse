@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -51,11 +52,24 @@ func (st *State) verifyWebhookToken(w http.ResponseWriter, r *http.Request, enti
 		writeErr(w, http.StatusForbidden, "webhook not enabled")
 		return false
 	}
-	if r.URL.Query().Get("token") != *required {
+	if !tokenMatches(r, *required) {
 		writeErr(w, http.StatusUnauthorized, "invalid or missing token")
 		return false
 	}
 	return true
+}
+
+// tokenMatches compares ?token in constant time, since these endpoints need no
+// session.
+func tokenMatches(r *http.Request, want string) bool {
+	return subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(want)) == 1
+}
+
+// k8sWebhookKey is the token key of a workload's restart webhook. Namespaces,
+// kinds and names can't contain ':', so the key is unambiguous and stays one
+// path segment in the token routes.
+func k8sWebhookKey(namespace, kind, name string) string {
+	return namespace + ":" + kind + ":" + name
 }
 
 func boolParam(r *http.Request, key string, def bool) bool {
@@ -158,7 +172,7 @@ func (st *State) handleWebhookRedeployStack(w http.ResponseWriter, r *http.Reque
 		writeErr(w, http.StatusForbidden, "webhook not enabled for this stack")
 		return
 	}
-	if r.URL.Query().Get("token") != *s.WebhookToken {
+	if !tokenMatches(r, *s.WebhookToken) {
 		writeErr(w, http.StatusUnauthorized, "invalid or missing token")
 		return
 	}
@@ -236,7 +250,33 @@ func (st *State) handleWebhookScaleSwarm(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"service": serviceID, "updated": true})
 }
 
-// ── Kubernetes: rollout restart ───────────────────────────────────────────────
+// ── Kubernetes: rolling restart ───────────────────────────────────────────────
+
+// handleWebhookK8sRestart does a rolling restart of a Deployment, StatefulSet
+// or DaemonSet. Pods are replaced one by one, so a mutable tag with
+// imagePullPolicy: Always picks up the newly pushed image.
+func (st *State) handleWebhookK8sRestart(w http.ResponseWriter, r *http.Request) {
+	hostID := r.PathValue("host_id")
+	namespace, kind, name := r.PathValue("namespace"), r.PathValue("kind"), r.PathValue("name")
+	if !st.verifyWebhookToken(w, r, "k8s", k8sWebhookKey(namespace, kind, name), hostID) {
+		return
+	}
+	agentID, agentAddr, _, ok := st.resolveTarget(w, r, hostID)
+	if !ok {
+		return
+	}
+	resp := st.Agent.CallOn(r.Context(), agentID, agentAddr, protocol.Request{
+		Kind: protocol.ReqK8sRestart, Namespace: namespace, WorkloadKind: kind, Name: name,
+	})
+	if resp.Kind != protocol.RespKindOk {
+		writeUnexpected(w, resp)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"namespace": namespace, "kind": kind, "name": name, "restarted": true})
+}
+
+// handleWebhookK8sRollout is the original Deployment-only webhook, keyed
+// "namespace/deployment". Kept so existing URLs keep working.
 
 func (st *State) handleWebhookK8sRollout(w http.ResponseWriter, r *http.Request) {
 	hostID := r.PathValue("host_id")
