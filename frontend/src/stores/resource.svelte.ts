@@ -172,7 +172,20 @@ class ResourcesStore {
     }
   }
 
+  /** The environment the lists were loaded for. */
+  private loadedFor: string | null = null;
+
   async loadActiveTab() {
+    // Another environment's lists would show until the new ones arrive.
+    if (hostsStore.activeHostId !== this.loadedFor) {
+      this.loadedFor = hostsStore.activeHostId;
+      this.sysInfo = null;
+      this.images = [];
+      this.imgTotal = 0;
+      this.volumes = [];
+      this.volTotal = 0;
+      this.networks = [];
+    }
     if (this.tab === "images") await this.loadImages();
     else if (this.tab === "volumes") await this.loadVolumes();
     else if (this.tab === "networks") await this.loadNetworks();

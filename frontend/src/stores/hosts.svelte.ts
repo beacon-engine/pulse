@@ -1,6 +1,6 @@
 // src/lib/stores/hosts.svelte.ts
 import { api } from "../lib/api";
-import { envFromUrl, setEnvInUrl } from "../lib/router";
+import { envFromUrl, navigate, setEnvInUrl, type Route } from "../lib/router";
 import {
   satisfies,
   type Environment,
@@ -87,13 +87,16 @@ class HostsStore {
     }
   }
 
-  switchHost(host: Environment) {
+  /** Make host the active environment. With `landOn`, also go to that page,
+   *  as one history entry. */
+  switchHost(host: Environment, landOn?: Route) {
     this.activeHostObj = host;
     if (!this.hosts.some((h) => h.id === host.id)) {
       this.hosts = [host, ...this.hosts].slice(0, 8);
     }
     this.activeHostId = host.id;
-    setEnvInUrl(host.id);
+    if (landOn) navigate(landOn, host.id);
+    else setEnvInUrl(host.id);
     void this.probe(host.id);
   }
 

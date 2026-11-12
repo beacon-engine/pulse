@@ -24,18 +24,22 @@ class KubernetesStore extends PollingStore {
   loading = $state(false);
   error = $state("");
 
+  protected reset() {
+    this.pods = [];
+    this.namespaces = [];
+    this.workloads = [];
+    this.nodes = [];
+    this.services = [];
+    this.events = [];
+    this.sectionErrors = {};
+    this.error = "";
+  }
+
   async refresh() {
-    const hostId = hostsStore.activeHostId;
+    const hostId = this.beginLoad();
     if (!hostId) {
-      // No host selected yet — nothing to query. Clear state and bail so we
-      // don't hit an unscoped URL that 404s into the SPA fallback.
-      this.pods = [];
-      this.namespaces = [];
-      this.workloads = [];
-      this.nodes = [];
-      this.services = [];
-      this.events = [];
-      this.sectionErrors = {};
+      // No host selected yet: nothing to query (an unscoped URL would 404 into
+      // the SPA fallback).
       this.loading = false;
       return;
     }
@@ -63,6 +67,7 @@ class KubernetesStore extends PollingStore {
         optional("services", api.getK8sServices(hostId)),
         optional("events", api.getK8sEvents(hostId)),
       ]);
+      if (this.stale(hostId)) return;
       this.pods = p;
       this.namespaces = n;
       this.workloads = w;
@@ -71,10 +76,11 @@ class KubernetesStore extends PollingStore {
       this.events = events;
       this.sectionErrors = errors;
     } catch (err: any) {
+      if (this.stale(hostId)) return;
       this.error = errorText(err);
       toast.error(`Kubernetes error: ${this.error}`);
     } finally {
-      this.loading = false;
+      if (!this.stale(hostId)) this.loading = false;
     }
   }
 

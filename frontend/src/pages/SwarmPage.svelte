@@ -1,16 +1,20 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { untrack } from "svelte";
   import { api } from "../lib/api";
   import { swarmStore } from "../stores/swarm.svelte";
   import { hostsStore } from "../stores/hosts.svelte";
   import { toast } from "../lib/toast.svelte";
+  import { webhookUrl } from "../lib/webhooks";
+  import WebhookUrl from "../components/WebhookUrl.svelte";
   import type { SwarmService } from "../types/containers";
 
   let updatingService = $state("");
   let serviceTokens = $state<Record<string, string | null>>({});
 
-  onMount(() => {
-    swarmStore.startPolling(15000);
+  // Reload as soon as the environment changes, not at the next poll.
+  $effect(() => {
+    if (!hostsStore.activeHostId) return;
+    untrack(() => swarmStore.startPolling(15000));
     return () => swarmStore.stopPolling();
   });
 
@@ -91,7 +95,7 @@
   }
 
   function swarmWebhookUrl(hostId: string, serviceId: string, token: string): string {
-    return `${window.location.origin}/api/webhooks/${hostId}/swarm/${serviceId}/update?token=${token}`;
+    return webhookUrl(`${hostId}/swarm/${serviceId}/update`, { token });
   }
 
   // Reload webhook tokens only when the set of services actually changes
@@ -181,22 +185,9 @@
               {#if token && hostsStore.activeHostId}
                 <div class="webhook-cell">
                   <span class="wh-active">active</span>
-                  <code class="wh-url-sm">
-                    {swarmWebhookUrl(hostsStore.activeHostId, svc.id, token).replace(window.location.origin, "")}
-                  </code>
-                  <button
-                    class="icon-copy"
-                    title="Copy URL"
-                    onclick={() =>
-                      navigator.clipboard.writeText(
-                        swarmWebhookUrl(hostsStore.activeHostId!, svc.id, token)
-                      )}
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <rect x="9" y="9" width="13" height="13" rx="2" />
-                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                    </svg>
-                  </button>
+                  <div class="wh-url-cell">
+                    <WebhookUrl url={swarmWebhookUrl(hostsStore.activeHostId, svc.id, token)} />
+                  </div>
                   <button class="icon-copy" title="Rotate token" onclick={() => rotateServiceToken(svc.id)}>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <path d="M3 12a9 9 0 1 0 2.6-6.4L3 8" />
@@ -415,14 +406,10 @@
     align-items: center;
     gap: 6px;
   }
-  .wh-url-sm {
-    font-family: "JetBrains Mono", monospace;
-    font-size: 10px;
-    color: var(--mist);
-    max-width: 240px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .wh-url-cell {
+    flex: 1;
+    min-width: 260px;
+    max-width: 420px;
   }
   .icon-copy {
     width: 22px;
