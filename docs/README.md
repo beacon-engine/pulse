@@ -1,5 +1,15 @@
 # Pulse documentation
 
+## What it supports
+
+| Platform | Support |
+|---|---|
+| **Docker** | Containers, images, volumes, networks, logs, exec, Compose stacks |
+| **Docker Swarm** | Services, nodes, tasks, scaling, rolling updates |
+| **Kubernetes** | Workloads (scale, rolling restart), pods and containers (logs, inspect, delete), services, nodes, events |
+| **Podman** | Partial, through its Docker-compatible socket |
+| ECS, Nomad, Cloud Run | Planned ([roadmap](roadmap.md)) |
+
 ## Run it
 
 | Guide | For |
@@ -29,7 +39,3 @@
 
 - [Agent enrollment](design/agent-enrollment.md): one-time join codes and
   per-agent credentials (planned)
-- [Push and pull transport](design/push-pull-transport.md): the WebSocket
-  transport design
-
-[archive/](archive/) holds early notes from when Pulse was written in Rust.
