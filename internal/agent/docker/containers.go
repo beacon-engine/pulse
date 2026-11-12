@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/netip"
 	"sort"
 	"strconv"
@@ -149,61 +148,6 @@ func InspectRaw(ctx context.Context, cli *client.Client, id string) (json.RawMes
 }
 
 // ── Recreate variants ────────────────────────────────────────────────────────
-
-// recreateWith stops+removes the container and re-creates it under the same name
-// from a freshly-built config, optionally pulling the image first.
-func recreateWith(ctx context.Context, cli *client.Client, id string, mutate func(cfg *container.Config, hc *container.HostConfig), pull bool) (string, error) {
-	res, err := cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
-	if err != nil {
-		return "", err
-	}
-	info := res.Container
-	name := strings.TrimPrefix(info.Name, "/")
-
-	oldCfg := info.Config
-	hc := info.HostConfig
-	if oldCfg == nil {
-		oldCfg = &container.Config{}
-	}
-	if hc == nil {
-		hc = &container.HostConfig{}
-	}
-
-	newCfg := &container.Config{
-		Image:  oldCfg.Image,
-		Cmd:    oldCfg.Cmd,
-		Env:    oldCfg.Env,
-		Labels: oldCfg.Labels,
-	}
-	if mutate != nil {
-		mutate(newCfg, hc)
-	}
-
-	// Best-effort stop, then force remove.
-	timeout := 5
-	_, _ = cli.ContainerStop(ctx, id, client.ContainerStopOptions{Timeout: &timeout})
-	if _, err := cli.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true}); err != nil {
-		return "", err
-	}
-
-	if pull && newCfg.Image != "" {
-		rc, err := cli.ImagePull(ctx, newCfg.Image, client.ImagePullOptions{})
-		if err != nil {
-			return "", err
-		}
-		_, _ = io.Copy(io.Discard, rc) // drain so the pull completes
-		_ = rc.Close()
-	}
-
-	created, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{Config: newCfg, HostConfig: hc, Name: name})
-	if err != nil {
-		return "", err
-	}
-	if _, err := cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
-		return "", err
-	}
-	return created.ID, nil
-}
 
 func Recreate(ctx context.Context, cli *client.Client, id string, newPorts []protocol.PortMap) (string, error) {
 	bindings := network.PortMap{}
