@@ -3,7 +3,7 @@ GOBIN := $(shell go env GOPATH)/bin
 VERSION := $(shell cat VERSION 2>/dev/null || echo dev)
 LDFLAGS := -X github.com/beacon-engine/pulse/internal/version.Version=$(VERSION)
 
-.PHONY: help tools build test fmt vet check \
+.PHONY: help tools build test fmt vet check version \
         watch-gateway watch-agent debug-gateway debug-agent \
         frontend clean security security-iac security-deps security-images
 
@@ -19,6 +19,9 @@ tools: ## Install dev tools (air for hot-reload, dlv for debugging)
 build: ## Build both binaries into ./bin
 	go build -ldflags "$(LDFLAGS)" -o ./bin/agent ./cmd/agent
 	go build -ldflags "$(LDFLAGS)" -o ./bin/gateway ./cmd/gateway
+
+version: ## Set the version everywhere: make version V=0.2.0 [BRANCH=release|hotfix]
+	@scripts/set-version.sh $(V) $(if $(BRANCH),--$(BRANCH))
 
 test: ## Run all Go tests
 	go test ./... -count=1
