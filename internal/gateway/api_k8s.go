@@ -128,3 +128,31 @@ func (st *State) handleK8sRestart(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
+
+func (st *State) handleK8sNodes(w http.ResponseWriter, r *http.Request) {
+	var v []protocol.NodeInfo
+	if st.proxy(w, r, r.PathValue("id"),
+		func(string) protocol.Request { return protocol.Request{Kind: protocol.ReqK8sNodes} },
+		protocol.RespKindNodes, &v) {
+		writeJSON(w, http.StatusOK, orEmpty(v))
+	}
+}
+
+func (st *State) handleK8sServices(w http.ResponseWriter, r *http.Request) {
+	var v []protocol.ServiceInfo
+	if st.proxy(w, r, r.PathValue("id"),
+		func(string) protocol.Request { return protocol.Request{Kind: protocol.ReqK8sServices} },
+		protocol.RespKindServices, &v) {
+		writeJSON(w, http.StatusOK, orEmpty(v))
+	}
+}
+
+// handleK8sEvents returns the cluster's most recent events, newest first.
+func (st *State) handleK8sEvents(w http.ResponseWriter, r *http.Request) {
+	var v []protocol.EventInfo
+	if st.proxy(w, r, r.PathValue("id"),
+		func(string) protocol.Request { return protocol.Request{Kind: protocol.ReqK8sEvents} },
+		protocol.RespKindK8sEvents, &v) {
+		writeJSON(w, http.StatusOK, orEmpty(v))
+	}
+}

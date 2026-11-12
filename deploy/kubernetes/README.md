@@ -1,8 +1,9 @@
 # Running the Pulse agent in Kubernetes
 
 One agent per cluster gives Pulse a **Kubernetes** environment. In it you can see
-workloads, pods, and their containers, read each container's logs, scale and
-restart workloads, and delete pods.
+workloads, pods and their containers, services, nodes and events; read each
+container's logs; scale and restart workloads; and delete pods. The page's header
+says whether the cluster is connected through a push or a pull agent.
 
 | Manifest | Mode | When to use |
 |---|---|---|
@@ -77,8 +78,20 @@ runtime.
 |---|---|
 | `Uplink connect … failed`, repeating | Wrong URL/DNS, or the cluster can't reach the gateway |
 | Gateway logs `invalid or missing agent token` | The Secret doesn't match a `PULSE_AGENT_TOKENS` entry, or the gateway wasn't restarted after adding it |
-| Kubernetes page: *"isn't allowed to do this"* | The ClusterRole is older than the agent; re-apply the manifest |
+| Kubernetes page: *"isn't allowed to do this"*, or a tab saying it couldn't load nodes / services / events | The ClusterRole is older than the agent; re-apply it (below) |
 | Self-signed gateway certificate | Uncomment `PULSE_INSECURE_SKIP_TLS_VERIFY` (trusted networks only) |
+
+### Updating an existing install
+
+Pulse releases sometimes need more RBAC (the Nodes, Services and Events tabs
+need read access to those objects). Re-applying the whole manifest is safe: it
+doesn't contain your token Secret, and it keeps the image and settings you
+edited into it.
+
+```bash
+kubectl apply -f deploy/kubernetes/agent-push.yaml     # RBAC + deployment
+kubectl -n pulse rollout restart deploy/pulse-agent    # pick up a rebuilt image with the same tag
+```
 
 ### Local clusters: using an image you built
 
@@ -115,6 +128,7 @@ Cluster-wide, exactly what the Kubernetes page uses:
 | `pods` (core) | get, list, delete | Pods table; delete (the controller recreates it) |
 | `pods/log` (core) | get | Container logs |
 | `namespaces` (core) | get, list | Namespace list and filter |
+| `nodes`, `services`, `events` (core) | get, list | Nodes, Services and Events tabs (read-only) |
 | `deployments`, `statefulsets`, `daemonsets` (apps) | get, list, patch | Workloads table; scale (`spec.replicas`); rolling restart |
 
 It **cannot** read Secrets or ConfigMaps, exec into pods, or create anything.

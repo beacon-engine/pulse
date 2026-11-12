@@ -15,14 +15,17 @@ type Environment struct {
 	// AGENT_ADDR. nil uses the default.
 	AgentAddr *string `json:"agent_addr"`
 	// Source is "manual" (created via the API or the seeded Local host) or
-	// "auto" (self-registered by a dial-in agent). Only "auto" rows go through
-	// the liveness lifecycle below.
+	// "auto" (self-registered by a dial-in agent). Auto rows and manual rows with
+	// an AgentAddr (pull agents, which the gateway pings) go through the liveness
+	// lifecycle below; only auto rows are ever deleted by it.
 	Source string `json:"source"`
-	// Status is "online" or "offline" for auto rows; manual rows stay "online".
+	// Status is "online" or "offline" for auto and pull rows; other manual rows
+	// stay "online".
 	Status string `json:"status"`
-	// LastSeen is the RFC3339 UTC time of the last connect/heartbeat (auto rows).
+	// LastSeen is the RFC3339 UTC time of the last connect/heartbeat (auto rows)
+	// or successful ping (pull rows).
 	LastSeen *string `json:"last_seen"`
-	// OfflineSince is when an auto row was marked offline; nil while online.
+	// OfflineSince is when the row was marked offline; nil while online.
 	OfflineSince *string `json:"offline_since"`
 }
 

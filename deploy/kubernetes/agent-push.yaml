@@ -42,6 +42,10 @@ rules:
   - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["get", "list"]
+  # Read-only views: Nodes, Services and Events tabs.
+  - apiGroups: [""]
+    resources: ["nodes", "services", "events"]
+    verbs: ["get", "list"]
   # Workloads: list, scale (patch spec.replicas) and rolling restart (patch the
   # pod template's restartedAt annotation).
   - apiGroups: ["apps"]

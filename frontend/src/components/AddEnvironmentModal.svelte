@@ -104,13 +104,17 @@
         />
       </label>
       <label>
-        <span>Container endpoint on the agent <span class="opt">optional</span></span>
+        <span>Docker / Podman socket on the agent's machine <span class="opt">optional</span></span>
         <input
           type="text"
           bind:value={dockerHost}
-          placeholder="Leave empty for the agent's local default"
+          placeholder="unix:///run/podman/podman.sock"
           disabled={loading}
         />
+        <span class="field-hint">
+          Only if the agent should use a container API other than its default
+          <code>/var/run/docker.sock</code>. Leave empty for Kubernetes agents.
+        </span>
       </label>
     {:else}
       <label>
@@ -171,6 +175,8 @@
   }
   .seg button.on { background: #fff; color: #0f172a; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
   .opt { font-weight: 500; color: #94a3b8; margin-left: 4px; }
+  .field-hint { font-size: 0.75rem; font-weight: 400; color: #94a3b8; line-height: 1.45; }
+  .field-hint code { font-size: 0.72rem; }
   .error { background: #fee2e2; color: #991b1b; border-radius: 8px; padding: 8px 12px; font-size: 0.8rem; }
   .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
   .btn { padding: 9px 18px; border-radius: 8px; font-size: 0.85rem; font-weight: 600; cursor: pointer; border: none; transition: all 0.15s; }

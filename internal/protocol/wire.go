@@ -134,6 +134,9 @@ const (
 	ReqK8sPodLogs          = "K8sPodLogs"
 	ReqK8sScale            = "K8sScale"
 	ReqK8sRestart          = "K8sRestart"
+	ReqK8sNodes            = "K8sNodes"
+	ReqK8sServices         = "K8sServices"
+	ReqK8sEvents           = "K8sEvents"
 	ReqWatchEvents         = "WatchEvents"
 )
 
@@ -144,6 +147,9 @@ var reqUnit = map[string]bool{
 	ReqK8sPods:         true,
 	ReqK8sNamespaces:   true,
 	ReqK8sWorkloads:    true,
+	ReqK8sNodes:        true,
+	ReqK8sServices:     true,
+	ReqK8sEvents:       true,
 }
 
 // reqFields maps each data-carrying variant to the wire field names it emits.
@@ -301,6 +307,9 @@ const (
 	RespKindPods              = "Pods"
 	RespKindNamespaces        = "Namespaces"
 	RespKindWorkloads         = "Workloads"
+	RespKindNodes             = "Nodes"
+	RespKindServices          = "Services"
+	RespKindK8sEvents         = "K8sEvents"
 	RespKindEvent             = "Event"
 	RespKindError             = "Error"
 	// RespKindHeartbeat is an agent->gateway liveness ping pushed on
@@ -341,6 +350,9 @@ func RespSwarmTasks(v []SwarmTask) Response       { return Response{RespKindSwar
 func RespPods(v []PodInfo) Response               { return Response{RespKindPods, v} }
 func RespNamespaces(v []NamespaceInfo) Response   { return Response{RespKindNamespaces, v} }
 func RespWorkloads(v []WorkloadInfo) Response     { return Response{RespKindWorkloads, v} }
+func RespNodes(v []NodeInfo) Response             { return Response{RespKindNodes, v} }
+func RespServices(v []ServiceInfo) Response       { return Response{RespKindServices, v} }
+func RespK8sEvents(v []EventInfo) Response        { return Response{RespKindK8sEvents, v} }
 func RespEvent(v EventFrame) Response             { return Response{RespKindEvent, v} }
 
 // RespError builds an error reply. status is an HTTP status code the gateway relays.

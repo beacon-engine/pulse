@@ -60,6 +60,11 @@ type Repository interface {
 	MarkEnvironmentAlerted(ctx context.Context, id string) error
 	DeleteExpiredEnvironments(ctx context.Context, retentionSeconds int) (int64, error)
 
+	// Pull agents (manual environments with an agent address): the gateway
+	// probes them, since they never call home.
+	ListPullEnvironments(ctx context.Context) ([]protocol.Environment, error)
+	SetPullStatus(ctx context.Context, id string, online bool) error
+
 	// Runtime-tunable settings (DB-backed).
 	GetSetting(ctx context.Context, key string) (*string, error)
 	SetSetting(ctx context.Context, key, value string) error

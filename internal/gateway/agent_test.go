@@ -321,3 +321,58 @@ func TestUnregisterIfKeepsReplacementSession(t *testing.T) {
 		t.Errorf("current session should unregister")
 	}
 }
+
+// An agent whose link dies silently (it stops reading, so pings go unanswered)
+// is dropped by the keepalive instead of keeping a session that swallows
+// requests until they time out.
+func TestAgentSessionDroppedWhenPingsGoUnanswered(t *testing.T) {
+	defer func(i, to time.Duration) { sessionPingInterval, sessionPingTimeout = i, to }(sessionPingInterval, sessionPingTimeout)
+	sessionPingInterval, sessionPingTimeout = 50*time.Millisecond, 100*time.Millisecond
+
+	st := testState()
+	srv := httptest.NewServer(http.HandlerFunc(st.AgentWSHandler))
+	defer srv.Close()
+
+	c := dialAgent(t, context.Background(), srv.URL, "s3cret")
+	defer c.CloseNow()
+	// The fake agent never reads, so it never answers the gateway's pings.
+	waitRegistered(t, st, "prod", true)
+	waitRegistered(t, st, "prod", false)
+}
+
+// A session's teardown that loses the race with the agent's reconnect must not
+// leave the environment offline while the new session is live.
+func TestOldSessionTeardownDoesNotOfflineReconnectedAgent(t *testing.T) {
+	srv, st := apiTestServer(t)
+	defer srv.Close()
+	ctx := context.Background()
+	agentID := "prod:i-1"
+	if _, err := st.DB.UpsertAutoEnvironment(ctx, agentID, "cluster", ""); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	status := func() string {
+		envs, _ := st.DB.ListEnvironmentsPage(ctx, "cluster", 10, 0)
+		if len(envs) != 1 {
+			t.Fatalf("envs = %+v", envs)
+		}
+		return envs[0].Status
+	}
+
+	// The reconnect registered before the old session's offline write landed.
+	st.Agent.Register(agentID, &SessionTransport{})
+	if st.markSessionOffline(ctx, agentID, false) {
+		t.Error("markSessionOffline reported offline although the agent is connected")
+	}
+	if s := status(); s != "online" {
+		t.Errorf("status = %s, want online (a live session exists)", s)
+	}
+
+	// With no live session it really goes offline.
+	st.Agent.UnregisterIf(agentID, st.Agent.sessions[agentID])
+	if !st.markSessionOffline(ctx, agentID, false) {
+		t.Error("markSessionOffline kept a disconnected agent online")
+	}
+	if s := status(); s != "offline" {
+		t.Errorf("status = %s, want offline", s)
+	}
+}

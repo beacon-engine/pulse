@@ -208,15 +208,51 @@ func (r *SqliteRepository) MarkStaleOffline(ctx context.Context, thresholdSecond
 	return err
 }
 
-// ListEnvironmentsPendingAlert returns auto rows that went offline abruptly
-// (graceful=0), haven't been alerted yet, and have been offline for at least
-// graceSeconds (the debounce for fast rolling replacements).
+// ListEnvironmentsPendingAlert returns auto rows and pull-agent rows that went
+// offline abruptly (graceful=0), haven't been alerted yet, and have been offline
+// for at least graceSeconds (the debounce for fast rolling replacements).
 func (r *SqliteRepository) ListEnvironmentsPendingAlert(ctx context.Context, graceSeconds int) ([]protocol.Environment, error) {
-	rows, err := r.db.QueryContext(ctx,
+	return r.queryEnvs(ctx,
 		`SELECT `+envCols+` FROM environments
-		 WHERE source = 'auto' AND status = 'offline' AND graceful = 0 AND alerted = 0
+		 WHERE (source = 'auto' OR `+isPullAgent+`)
+		   AND status = 'offline' AND graceful = 0 AND alerted = 0
 		   AND offline_since IS NOT NULL AND offline_since <= ?`,
 		rfc3339Ago(graceSeconds))
+}
+
+// isPullAgent matches manual environments reached through their own agent
+// address, which the gateway has to probe for liveness.
+const isPullAgent = `(source = 'manual' AND agent_addr IS NOT NULL AND agent_addr != '')`
+
+// ListPullEnvironments returns the manual environments that have a pull agent.
+func (r *SqliteRepository) ListPullEnvironments(ctx context.Context) ([]protocol.Environment, error) {
+	return r.queryEnvs(ctx, `SELECT `+envCols+` FROM environments WHERE `+isPullAgent)
+}
+
+// SetPullStatus records a pull agent's probe result. Reachable bumps last_seen
+// and clears the offline episode; unreachable starts one (once, so
+// offline_since keeps the time it first failed). Retention never deletes these
+// rows: an admin added them.
+func (r *SqliteRepository) SetPullStatus(ctx context.Context, id string, online bool) error {
+	now := nowRFC3339()
+	if online {
+		_, err := r.db.ExecContext(ctx,
+			`UPDATE environments
+			 SET status = 'online', last_seen = ?, offline_since = NULL, graceful = 0, alerted = 0
+			 WHERE id = ?`,
+			now, id)
+		return err
+	}
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE environments
+		 SET status = 'offline', offline_since = ?
+		 WHERE id = ? AND status = 'online'`,
+		now, id)
+	return err
+}
+
+func (r *SqliteRepository) queryEnvs(ctx context.Context, query string, args ...any) ([]protocol.Environment, error) {
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

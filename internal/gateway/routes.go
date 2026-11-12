@@ -69,6 +69,7 @@ func (st *State) registerRoutes(mux *http.ServeMux) {
 
 	// ── Hosts (environments) ────────────────────────────────────────────────────
 	mux.HandleFunc("GET /api/hosts", st.handleListHosts)
+	mux.HandleFunc("GET /api/hosts/{id}", st.handleGetHost)
 	mux.HandleFunc("POST /api/hosts", st.handleCreateHost)
 	mux.HandleFunc("PUT /api/hosts/{id}", st.handleRenameHost)
 	mux.HandleFunc("DELETE /api/hosts/{id}", st.handleDeleteHost)
@@ -80,6 +81,9 @@ func (st *State) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/hosts/{id}/k8s/pods/{namespace}/{name}", st.handleK8sDeletePod)
 	mux.HandleFunc("GET /api/hosts/{id}/k8s/pods/{namespace}/{name}/logs", st.handleK8sPodLogs)
 	mux.HandleFunc("GET /api/hosts/{id}/k8s/workloads", st.handleK8sWorkloads)
+	mux.HandleFunc("GET /api/hosts/{id}/k8s/nodes", st.handleK8sNodes)
+	mux.HandleFunc("GET /api/hosts/{id}/k8s/services", st.handleK8sServices)
+	mux.HandleFunc("GET /api/hosts/{id}/k8s/events", st.handleK8sEvents)
 	mux.HandleFunc("POST /api/hosts/{id}/k8s/workloads/{namespace}/{kind}/{name}/scale", st.handleK8sScale)
 	mux.HandleFunc("POST /api/hosts/{id}/k8s/workloads/{namespace}/{kind}/{name}/restart", st.handleK8sRestart)
 

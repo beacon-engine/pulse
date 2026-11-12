@@ -9,7 +9,7 @@
   import ToastContainer from "./components/ToastContainer.svelte";
   import RuntimeUnavailable from "./components/RuntimeUnavailable.svelte";
 
-  import UsersPage from "./pages/UsersPage.svelte";
+  import SettingsPage from "./pages/SettingsPage.svelte";
   import HostsPage from "./pages/HostsPage.svelte";
   import ContainersPage from "./pages/ContainersPage.svelte";
   import StacksPage from "./pages/StacksPage.svelte";
@@ -21,7 +21,7 @@
 
   import { api, type Account } from "./lib/api";
   import { connect } from "./lib/websocket";
-  import { currentRoute, initRouter, navigate, type Route } from "./lib/router";
+  import { currentEnv, currentRoute, initRouter, navigate, type Route } from "./lib/router";
   import { hostsStore } from "./stores/hosts.svelte";
   import { containersStore } from "./stores/container.svelte";
   import { swarmStore } from "./stores/swarm.svelte";
@@ -51,6 +51,7 @@
     route = r;
     loadingStore.reset(); // Reset in-flight loader counter on route transitions
   });
+  currentEnv.subscribe((id) => void hostsStore.syncFromUrl(id));
 
   type NavItem = { id: Route; label: string; icon: string; requires?: Requirement };
 
@@ -97,16 +98,17 @@
     },
   ];
 
-  const USERS_NAV: NavItem = {
-    id: "users",
-    label: "Users",
-    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13A4 4 0 0 1 16 11"/></svg>`,
+  // Admin-only. Users moved inside Settings; #/users still opens that section.
+  const SETTINGS_NAV: NavItem = {
+    id: "settings",
+    label: "Settings",
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
   };
 
   // Only offer pages the active environment's runtimes can back: a
   // Kubernetes-only agent has no Containers page, a Podman host has no Swarm.
   let navItems = $derived(
-    (account?.role === "admin" ? [...NAV, USERS_NAV] : NAV).filter(
+    (account?.role === "admin" ? [...NAV, SETTINGS_NAV] : NAV).filter(
       (n) => !n.requires || hostsStore.supports(n.requires)
     )
   );
@@ -208,7 +210,7 @@
     }
     teardown();
     account = null;
-    if (route === "users") navigate("containers");
+    if (route === "users" || route === "settings") navigate("containers");
   }
 
   onMount(() => {
@@ -383,7 +385,7 @@
       {#each navItems as item}
         <button
           class="nav-item"
-          class:active={route === item.id}
+          class:active={route === item.id || (item.id === "settings" && route === "users")}
           onclick={() => navigate(item.id)}
         >
           {@html item.icon}
@@ -438,7 +440,7 @@
       <div class="topbar">
         <div class="topbar-left">
           <h1>
-            {[...NAV, USERS_NAV].find((n) => n.id === route)?.label ??
+            {[...NAV, SETTINGS_NAV].find((n) => n.id === (route === "users" ? "settings" : route))?.label ??
               (route === "hosts" ? "Hosts" : "")}
           </h1>
           <div class="topbar-sub">
@@ -494,8 +496,10 @@
           <SwarmPage />
         {:else if route === "kubernetes"}
           <KubernetesPage />
-        {:else if route === "users" && account}
-          <UsersPage me={account} />
+        {:else if (route === "users" || route === "settings") && account?.role === "admin"}
+          {#key route}
+            <SettingsPage me={account} initial={route === "users" ? "users" : undefined} />
+          {/key}
         {:else if route === "hosts"}
           <HostsPage />
         {/if}

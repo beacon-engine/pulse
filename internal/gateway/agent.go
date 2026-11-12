@@ -27,6 +27,15 @@ import (
 // requestTimeout bounds how long a routed request waits for its correlated reply.
 const requestTimeout = 30 * time.Second
 
+// Session keepalive: the gateway pings each push agent every sessionPingInterval
+// and drops the session when a pong doesn't arrive within sessionPingTimeout, so
+// a silently dead link stops taking requests (and the environment goes offline)
+// within about half a minute. Variables so tests can shorten them.
+var (
+	sessionPingInterval = 20 * time.Second
+	sessionPingTimeout  = 10 * time.Second
+)
+
 // AgentTransport executes a request and returns the agent's response.
 type AgentTransport interface {
 	Call(ctx context.Context, req protocol.Request) protocol.Response
@@ -142,6 +151,14 @@ func (r *AgentRouter) Register(agentID string, t AgentTransport) {
 	r.mu.Lock()
 	r.sessions[agentID] = t
 	r.mu.Unlock()
+}
+
+// IsConnected reports whether agentID has a live push session.
+func (r *AgentRouter) IsConnected(agentID string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.sessions[agentID]
+	return ok
 }
 
 // UnregisterIf removes agentID's session only if it is still t, and reports
@@ -337,6 +354,11 @@ func runSession(ctx context.Context, socket *websocket.Conn, st *State, agentID 
 
 	transport := &SessionTransport{pending: p, outbound: outbound, done: done}
 	st.Agent.Register(agentID, transport)
+	if auto {
+		// Overrides an "offline" written by the previous session's teardown
+		// before this session registered (see markSessionOffline).
+		_ = st.DB.TouchEnvironment(ctx, agentID)
+	}
 	log.Printf("Agent '%s' connected (push session)", agentID)
 
 	// Writer: serialize queued request frames to the socket.
@@ -353,6 +375,31 @@ func runSession(ctx context.Context, socket *websocket.Conn, st *State, agentID 
 				if err := socket.Write(ctx, websocket.MessageText, data); err != nil {
 					return
 				}
+			}
+		}
+	}()
+
+	// Keepalive: an unanswered ping closes the socket, which ends the reader.
+	go func() {
+		t := time.NewTicker(sessionPingInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+			}
+			pctx, cancel := context.WithTimeout(ctx, sessionPingTimeout)
+			err := socket.Ping(pctx)
+			cancel()
+			if err != nil {
+				select {
+				case <-done:
+				default:
+					log.Printf("Agent '%s' didn't answer a ping within %s; dropping the session", agentID, sessionPingTimeout)
+					socket.CloseNow()
+				}
+				return
 			}
 		}
 	}()
@@ -402,8 +449,23 @@ func runSession(ctx context.Context, socket *websocket.Conn, st *State, agentID 
 		log.Printf("Agent '%s' handed over to a new session", agentID)
 		return
 	}
-	if auto {
-		_ = st.DB.MarkEnvironmentOffline(context.WithoutCancel(ctx), agentID, graceful)
+	if auto && !st.markSessionOffline(context.WithoutCancel(ctx), agentID, graceful) {
+		log.Printf("Agent '%s' reconnected while its old session closed", agentID)
+		return
 	}
 	log.Printf("Agent '%s' disconnected (graceful=%t)", agentID, graceful)
+}
+
+// markSessionOffline marks an auto-registered environment offline after its
+// session ended, unless the agent has reconnected meanwhile. A fast reconnect
+// can register its new session between this session's unregister and the
+// database write; re-checking afterwards puts the environment back online.
+// Reports whether the environment stayed offline.
+func (st *State) markSessionOffline(ctx context.Context, agentID string, graceful bool) bool {
+	_ = st.DB.MarkEnvironmentOffline(ctx, agentID, graceful)
+	if st.Agent.IsConnected(agentID) {
+		_ = st.DB.TouchEnvironment(ctx, agentID)
+		return false
+	}
+	return true
 }

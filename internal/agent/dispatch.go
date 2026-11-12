@@ -251,6 +251,12 @@ func Dispatch(ctx context.Context, st *State, req protocol.Request) protocol.Res
 		return handleK8sScale(ctx, st, req.Namespace, req.WorkloadKind, req.Name, req.TargetReplicas)
 	case protocol.ReqK8sRestart:
 		return handleK8sRestart(ctx, st, req.Namespace, req.WorkloadKind, req.Name)
+	case protocol.ReqK8sNodes:
+		return handleK8sNodes(ctx, st)
+	case protocol.ReqK8sServices:
+		return handleK8sServices(ctx, st)
+	case protocol.ReqK8sEvents:
+		return handleK8sEvents(ctx, st)
 
 	// ── Event stream ────────────────────────────────────────────────────────────
 	// WatchEvents takes over a dedicated connection (handled before Dispatch in
