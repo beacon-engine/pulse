@@ -268,7 +268,14 @@ export class PulseClient {
     const { data } = await this.http.get<ContainerDetail>(
       `/hosts/${hostId}/containers/${containerId}/inspect`,
     );
-    return data;
+    // Agents before 0.1.1 send null for an empty list.
+    return {
+      ...data,
+      ports: data.ports ?? [],
+      mounts: data.mounts ?? [],
+      env: data.env ?? [],
+      cmd: data.cmd ?? [],
+    };
   }
 
   async inspectRawContainer(

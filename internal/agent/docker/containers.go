@@ -78,7 +78,7 @@ func Inspect(ctx context.Context, cli *client.Client, self selfguard.Self, id st
 	}
 	info := res.Container
 
-	var ports []protocol.ContainerPort
+	ports := []protocol.ContainerPort{}
 	if info.NetworkSettings != nil {
 		for p, bindings := range info.NetworkSettings.Ports {
 			for _, b := range bindings {
@@ -97,7 +97,8 @@ func Inspect(ctx context.Context, cli *client.Client, self selfguard.Self, id st
 		sort.Slice(ports, func(i, j int) bool { return ports[i].ContainerPort < ports[j].ContainerPort })
 	}
 
-	var mounts []protocol.ContainerMount
+	// Empty lists, not null: the dashboard reads their length.
+	mounts := []protocol.ContainerMount{}
 	for _, m := range info.Mounts {
 		mounts = append(mounts, protocol.ContainerMount{
 			Source:      m.Source,
@@ -114,12 +115,14 @@ func Inspect(ctx context.Context, cli *client.Client, self selfguard.Self, id st
 		RestartCount: int64(info.RestartCount),
 		Ports:        ports,
 		Mounts:       mounts,
+		Env:          []string{},
+		Cmd:          []string{},
 	}
 	var labels map[string]string
 	if info.Config != nil {
 		detail.Image = info.Config.Image
-		detail.Env = info.Config.Env
-		detail.Cmd = []string(info.Config.Cmd)
+		detail.Env = append(detail.Env, info.Config.Env...)
+		detail.Cmd = append(detail.Cmd, info.Config.Cmd...)
 		labels = info.Config.Labels
 	}
 	detail.ProtectedReason = self.ContainerProtection(info.ID, labels)
