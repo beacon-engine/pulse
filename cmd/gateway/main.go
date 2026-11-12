@@ -52,18 +52,11 @@ func main() {
 	log.Printf("Database ready at %s", cfg.DatabaseURL)
 	log.Printf("Forwarding Docker operations to agent at %s", cfg.AgentAddr)
 
-	st := gateway.NewState(cfg, db)
+	gw := gateway.New(cfg, db)
+	// The default agent's Docker events, push-agent liveness and pull-agent probes.
+	gw.Start(ctx)
 
-	// Consume the pull agent's Docker event stream in the background.
-	go gateway.RunWatcher(ctx, st)
-
-	// Enforce the auto-registered agent liveness lifecycle (offline/alert/retention).
-	go gateway.RunAgentSweeper(ctx, st)
-
-	// Ping pull agents (environments added by address), which never call home.
-	go gateway.RunPullProber(ctx, st)
-
-	srv := &http.Server{Addr: fmt.Sprintf("0.0.0.0:%d", cfg.HTTPPort), Handler: st.Routes()}
+	srv := &http.Server{Addr: fmt.Sprintf("0.0.0.0:%d", cfg.HTTPPort), Handler: gw.Handler()}
 	tls := cfg.TLSCertPath != "" && cfg.TLSKeyPath != ""
 
 	go func() {

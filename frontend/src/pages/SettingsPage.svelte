@@ -199,7 +199,7 @@
     {:else if section === 'enrollment'}
       <ComingSoon
         title="Agent enrollment"
-        summary="Add agents without hand-copying shared tokens: one-time enrollment codes and per-agent credentials (see docs/AGENT_ENROLLMENT.md)."
+        summary="Add agents without hand-copying shared tokens: one-time enrollment codes and per-agent credentials (see docs/design/agent-enrollment.md)."
         planned={[
           'Generate a one-time code and a ready-to-run command or Kubernetes manifest',
           'Per-agent credentials that can be rotated or revoked individually',

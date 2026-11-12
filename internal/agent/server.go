@@ -13,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/beacon-engine/pulse/internal/agent/docker"
 	"github.com/beacon-engine/pulse/internal/protocol"
 )
 
@@ -117,7 +118,7 @@ func handleConn(ctx context.Context, st *State, conn net.Conn) {
 				_ = protocol.WriteFrame(conn, connError(err.Error()))
 				return
 			}
-			_ = watchEvents(ctx, cli, func(r protocol.Response) error {
+			_ = docker.WatchEvents(ctx, cli, func(r protocol.Response) error {
 				return protocol.WriteFrame(conn, r)
 			})
 			return
