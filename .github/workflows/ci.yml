@@ -1,9 +1,13 @@
 name: CI Verification
 
+# PRs into release and hotfix branches (where features land) and into master
+# (where a release branch lands).
 on:
   pull_request:
     branches:
       - master
+      - "release/**"
+      - "hotfix/**"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -20,6 +24,7 @@ jobs:
   # release branch first.
   release-branch:
     name: Release Branch Policy
+    if: github.base_ref == 'master'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -44,11 +49,13 @@ jobs:
             echo "::error file=VERSION::Branch '$HEAD_REF' doesn't match VERSION ($v). Set VERSION to ${HEAD_REF#*/v}."
             exit 1
           fi
-          pkg=$(node -p "require('./frontend/package.json').version")
-          if [ "$pkg" != "$v" ]; then
-            echo "::error file=frontend/package.json::frontend/package.json version ($pkg) doesn't match VERSION ($v)."
-            exit 1
-          fi
+          for f in frontend/package.json frontend/package-lock.json; do
+            pkg=$(node -p "require('./$f').version")
+            if [ "$pkg" != "$v" ]; then
+              echo "::error file=$f::$f version ($pkg) doesn't match VERSION ($v). Run scripts/set-version.sh $v."
+              exit 1
+            fi
+          done
           if git ls-remote --exit-code --tags origin "refs/tags/v$v" >/dev/null; then
             echo "::error file=VERSION::v$v is already released. Bump VERSION (and the branch name)."
             exit 1

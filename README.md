@@ -372,14 +372,24 @@ without it they report `dev`.
 The version lives in [`VERSION`](VERSION) (`X.Y.Z`, no `v`). CI publishes
 images from `master`, and `master` only takes release branches:
 
-1. Cut `release/vX.Y.Z` (or `hotfix/vX.Y.Z`) and merge the finished feature
-   branches into it.
-2. Set `VERSION` and `frontend/package.json`'s `version` to `X.Y.Z`.
+1. Cut the branch and set the version in one step, then commit:
+   ```bash
+   make version V=0.2.0 BRANCH=release   # or BRANCH=hotfix; omit to only update files
+   git commit -am "chore: version 0.2.0"
+   ```
+   This writes `VERSION` and the frontend's `package.json` / `package-lock.json`
+   (`scripts/set-version.sh`), refusing a version that is already tagged.
+2. Merge the finished feature branches into it through PRs. Every PR into a
+   release or hotfix branch runs the tests and the security scans (Checkov,
+   Trivy).
 3. Open a PR into `master`. CI rejects any other branch, a name that doesn't
-   match `VERSION`, or a version that is already tagged.
-4. Merge. The release workflow pushes `pulse-gateway` and `pulse-agent` as
-   `X.Y.Z`, `X.Y`, `latest` and `sha-<commit>`, then tags the commit `vX.Y.Z`
-   and creates a GitHub release.
+   match `VERSION`, version files that disagree, or a version that is already
+   tagged.
+4. Merge. The release workflow only builds and pushes (the code was scanned on
+   its way into the release branch): `pulse-gateway` and `pulse-agent` as
+   `X.Y.Z`, `X.Y`, `latest` and `sha-<commit>`, then it tags the commit
+   `vX.Y.Z` and creates a GitHub release. The weekly security scan of `master`
+   still runs, to catch newly published CVEs.
 
 A push to `master` whose version is already tagged only refreshes `latest` and
 `sha-<commit>`, and those builds report `X.Y.Z-dev+<commit>`.
