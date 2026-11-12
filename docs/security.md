@@ -15,8 +15,8 @@
 **Before exposing Pulse:** the session cookie isn't marked `Secure`, so that
 local development works over plain HTTP. In production, serve Pulse over HTTPS
 ([deploy-docker.md](deploy-docker.md#3-put-it-behind-https)). Marking the cookie
-`Secure` is a one-line change in `setSessionCookie`
-(`internal/gateway/auth.go`): add `Secure: true`.
+`Secure` is a one-line change in `SetSessionCookie`
+(`internal/gateway/auth/auth.go`): add `Secure: true`.
 
 ## Gateway↔agent connections
 

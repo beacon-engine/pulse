@@ -90,8 +90,8 @@ clusters to point Pulse at.
 
 | Path | What it is |
 |---|---|
-| `cmd/agent`, `internal/agent` | The agent: Docker, Swarm and Kubernetes access |
-| `cmd/gateway`, `internal/gateway` | The gateway: HTTP API, auth, database (`internal/gateway/storage`) |
+| `cmd/agent`, `internal/agent` | The agent; `docker/`, `swarm/`, `kubernetes/` hold each runtime's operations |
+| `cmd/gateway`, `internal/gateway` | The gateway; `api/` holds the HTTP handlers, `storage/` the database |
 | `internal/protocol` | The gateway↔agent wire types, shared by both |
 | `frontend/` | The Svelte 5 dashboard |
 | `deploy/` | Compose file for servers, Kubernetes manifests |

@@ -25,7 +25,7 @@ metadata:
   name: pulse-agent
   namespace: pulse
 ---
-# Exactly the verbs the agent's Kubernetes page uses (internal/agent/kubernetes.go).
+# Exactly the verbs the agent's Kubernetes page uses (internal/agent/kubernetes/).
 # It can't read Secrets or ConfigMaps, exec into pods, or create anything.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

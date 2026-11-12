@@ -23,6 +23,34 @@ dashboard that the gateway serves.
   share, so the vocabulary is defined once.
 - **Dashboard** (`frontend/`): Svelte 5 + Vite. It talks only to the gateway.
 
+## Code layout
+
+```
+cmd/agent, cmd/gateway     the two programs' main packages
+internal/
+├── agent/                 config, request dispatch, pull server, push uplink, identity
+│   ├── docker/            containers, images, volumes, networks, Compose, events
+│   ├── swarm/             Swarm services, nodes, tasks
+│   ├── kubernetes/        workloads, pods, namespaces, nodes, services, events
+│   ├── hostmetrics/       CPU, memory, disks of the agent's machine
+│   └── selfguard/         recognising Pulse's own containers and pods
+├── gateway/               config, and New() which wires the parts below
+│   ├── api/               HTTP handlers (one file per area), routes, dashboard
+│   ├── agents/            reaching agents: router, pull client, push sessions
+│   ├── auth/              passwords, sessions, auth middleware
+│   ├── events/            live feed, Docker event watcher, Slack alerts
+│   ├── liveness/          offline sweeper, pull-agent prober
+│   ├── metrics/           Prometheus counters
+│   └── storage/           the database (SQLite) and its migrations
+├── protocol/              gateway↔agent types, one file per area, wire.go for framing
+└── version/               the build's version
+```
+
+In the agent, `dispatch.go` routes each request to the runtime packages, which
+don't know about each other or about the transport. In the gateway, `api`
+depends on the other packages and none of them depend on it; `agents` hands
+events to `events` through a callback, so the two stay independent.
+
 ## Push and pull
 
 An environment is reached through an agent in one of two ways:
@@ -39,7 +67,7 @@ changes who opened the connection. The transport is framed JSON over TCP, or
 JSON over WebSocket. The agent's port speaks only this protocol: an HTTP client
 that connects to it is logged and dropped.
 
-How the gateway picks a route for each request (`AgentRouter.CallOn`): the
+How the gateway picks a route for each request (`agents.Router.CallOn`): the
 environment's live push session if it has one, otherwise its own agent address,
 otherwise the default agent (`AGENT_ADDR`). A push environment whose agent is
 disconnected fails with "not connected" rather than falling through to another
