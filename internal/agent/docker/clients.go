@@ -4,7 +4,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 )
 
 // Ports agent/src/manager.rs — caches one Docker client per docker_host string.

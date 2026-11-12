@@ -3,9 +3,8 @@ package docker
 import (
 	"context"
 
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/client"
 
 	"github.com/beacon-engine/pulse/internal/protocol"
 )
@@ -17,10 +16,8 @@ import (
 // The gateway decides which events to persist / alert on. Used by the TCP pull
 // path, where a WatchEvents request takes over its connection.
 func WatchEvents(ctx context.Context, cli *client.Client, write func(protocol.Response) error) error {
-	f := filters.NewArgs()
-	f.Add("type", "container")
-
-	msgs, errs := cli.Events(ctx, events.ListOptions{Filters: f})
+	res := cli.Events(ctx, client.EventsListOptions{Filters: client.Filters{}.Add("type", "container")})
+	msgs, errs := res.Messages, res.Err
 	for {
 		select {
 		case <-ctx.Done():

@@ -2,10 +2,11 @@ package docker
 
 import (
 	"context"
+	"net/netip"
 	"sort"
 
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 
 	"github.com/beacon-engine/pulse/internal/protocol"
 )
@@ -13,12 +14,12 @@ import (
 // ── Networks ─────────────────────────────────────────────────────────────────
 
 func ListNetworks(ctx context.Context, cli *client.Client) ([]protocol.HostNetwork, error) {
-	nets, err := cli.NetworkList(ctx, network.ListOptions{})
+	nets, err := cli.NetworkList(ctx, client.NetworkListOptions{})
 	if err != nil {
 		return nil, err
 	}
-	result := make([]protocol.HostNetwork, 0, len(nets))
-	for _, n := range nets {
+	result := make([]protocol.HostNetwork, 0, len(nets.Items))
+	for _, n := range nets.Items {
 		result = append(result, protocol.HostNetwork{
 			ID:       n.ID,
 			Name:     n.Name,
@@ -32,10 +33,11 @@ func ListNetworks(ctx context.Context, cli *client.Client) ([]protocol.HostNetwo
 }
 
 func ContainerNetworks(ctx context.Context, cli *client.Client, containerID string) ([]protocol.ContainerNetworkInfo, error) {
-	info, err := cli.ContainerInspect(ctx, containerID)
+	res, err := cli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return nil, err
 	}
+	info := res.Container
 	var result []protocol.ContainerNetworkInfo
 	if info.NetworkSettings != nil {
 		for name, ep := range info.NetworkSettings.Networks {
@@ -45,9 +47,9 @@ func ContainerNetworks(ctx context.Context, cli *client.Client, containerID stri
 			result = append(result, protocol.ContainerNetworkInfo{
 				ID:         ep.NetworkID,
 				Name:       name,
-				IPAddress:  ep.IPAddress,
-				Gateway:    ep.Gateway,
-				MacAddress: ep.MacAddress,
+				IPAddress:  addrString(ep.IPAddress),
+				Gateway:    addrString(ep.Gateway),
+				MacAddress: ep.MacAddress.String(),
 			})
 		}
 	}
@@ -55,9 +57,23 @@ func ContainerNetworks(ctx context.Context, cli *client.Client, containerID stri
 }
 
 func ConnectNetwork(ctx context.Context, cli *client.Client, networkID, containerID string) error {
-	return cli.NetworkConnect(ctx, networkID, containerID, &network.EndpointSettings{})
+	_, err := cli.NetworkConnect(ctx, networkID, client.NetworkConnectOptions{
+		Container:      containerID,
+		EndpointConfig: &network.EndpointSettings{},
+	})
+	return err
 }
 
 func DisconnectNetwork(ctx context.Context, cli *client.Client, networkID, containerID string) error {
-	return cli.NetworkDisconnect(ctx, networkID, containerID, false)
+	_, err := cli.NetworkDisconnect(ctx, networkID, client.NetworkDisconnectOptions{Container: containerID})
+	return err
+}
+
+// addrString renders an unset address as "", as the Engine API did before it
+// was typed.
+func addrString(a netip.Addr) string {
+	if !a.IsValid() {
+		return ""
+	}
+	return a.String()
 }

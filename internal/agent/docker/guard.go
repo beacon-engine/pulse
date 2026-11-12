@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 
 	"github.com/beacon-engine/pulse/internal/agent/selfguard"
 	"github.com/beacon-engine/pulse/internal/protocol"
@@ -34,10 +34,11 @@ func GuardReplace(ctx context.Context, cli *client.Client, self selfguard.Self, 
 }
 
 func guardContainer(ctx context.Context, cli *client.Client, self selfguard.Self, id string, replace bool) (protocol.Response, bool) {
-	info, err := cli.ContainerInspect(ctx, id)
+	res, err := cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 	if err != nil {
 		return ExecError(err), false
 	}
+	info := res.Container
 	var labels map[string]string
 	if info.Config != nil {
 		labels = info.Config.Labels

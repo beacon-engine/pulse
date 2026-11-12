@@ -3,9 +3,7 @@ package docker
 import (
 	"context"
 
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 
 	"github.com/beacon-engine/pulse/internal/protocol"
 )
@@ -13,12 +11,12 @@ import (
 // ── Images ───────────────────────────────────────────────────────────────────
 
 func ListImages(ctx context.Context, cli *client.Client) ([]protocol.ImageInfo, error) {
-	images, err := cli.ImageList(ctx, image.ListOptions{})
+	images, err := cli.ImageList(ctx, client.ImageListOptions{})
 	if err != nil {
 		return nil, err
 	}
-	result := make([]protocol.ImageInfo, 0, len(images))
-	for _, img := range images {
+	result := make([]protocol.ImageInfo, 0, len(images.Items))
+	for _, img := range images.Items {
 		tags := make([]string, 0, len(img.RepoTags))
 		dangling := len(img.RepoTags) == 0
 		allNone := true
@@ -40,14 +38,14 @@ func ListImages(ctx context.Context, cli *client.Client) ([]protocol.ImageInfo, 
 }
 
 func DeleteImage(ctx context.Context, cli *client.Client, id string) error {
-	_, err := cli.ImageRemove(ctx, id, image.RemoveOptions{Force: true})
+	_, err := cli.ImageRemove(ctx, id, client.ImageRemoveOptions{Force: true})
 	return err
 }
 
 func PruneImages(ctx context.Context, cli *client.Client) (int64, error) {
-	report, err := cli.ImagesPrune(ctx, filters.NewArgs())
+	res, err := cli.ImagePrune(ctx, client.ImagePruneOptions{})
 	if err != nil {
 		return 0, err
 	}
-	return int64(report.SpaceReclaimed), nil
+	return int64(res.Report.SpaceReclaimed), nil
 }

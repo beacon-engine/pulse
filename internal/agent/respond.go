@@ -1,7 +1,7 @@
 package agent
 
 import (
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 
 	"github.com/beacon-engine/pulse/internal/agent/docker"
 	"github.com/beacon-engine/pulse/internal/protocol"

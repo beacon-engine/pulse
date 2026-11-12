@@ -8,7 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker/api/types/swarm"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 	"k8s.io/apimachinery/pkg/version"
 
 	"github.com/beacon-engine/pulse/internal/protocol"
@@ -62,7 +63,7 @@ func probeContainerRuntime(ctx context.Context, st *State, dockerHost string) (*
 	if err != nil {
 		return nil, err
 	}
-	v, err := cli.ServerVersion(ctx)
+	v, err := cli.ServerVersion(ctx, client.ServerVersionOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +81,7 @@ func probeContainerRuntime(ctx context.Context, st *State, dockerHost string) (*
 		}
 	}
 	if rt.Kind == protocol.RuntimeDocker {
-		if info, err := cli.Info(ctx); err == nil && info.Swarm.LocalNodeState == swarm.LocalNodeStateActive {
+		if res, err := cli.Info(ctx, client.InfoOptions{}); err == nil && res.Info.Swarm.LocalNodeState == swarm.LocalNodeStateActive {
 			rt.Features = append(rt.Features, protocol.FeatureSwarm)
 		}
 	}

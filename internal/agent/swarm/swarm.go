@@ -8,9 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 
 	"github.com/beacon-engine/pulse/internal/protocol"
 )
@@ -18,12 +17,12 @@ import (
 // Ports agent/src/swarm.rs — Docker Swarm services, nodes, tasks and scaling.
 
 func Services(ctx context.Context, cli *client.Client) ([]protocol.SwarmService, error) {
-	list, err := cli.ServiceList(ctx, swarm.ServiceListOptions{Status: true})
+	list, err := cli.ServiceList(ctx, client.ServiceListOptions{Status: true})
 	if err != nil {
 		return nil, err
 	}
-	result := make([]protocol.SwarmService, 0, len(list))
-	for _, s := range list {
+	result := make([]protocol.SwarmService, 0, len(list.Items))
+	for _, s := range list.Items {
 		var replicas uint64
 		if rep := s.Spec.Mode.Replicated; rep != nil && rep.Replicas != nil {
 			replicas = *rep.Replicas
@@ -50,12 +49,12 @@ func Services(ctx context.Context, cli *client.Client) ([]protocol.SwarmService,
 }
 
 func Nodes(ctx context.Context, cli *client.Client) ([]protocol.SwarmNode, error) {
-	list, err := cli.NodeList(ctx, swarm.NodeListOptions{})
+	list, err := cli.NodeList(ctx, client.NodeListOptions{})
 	if err != nil {
 		return nil, err
 	}
-	result := make([]protocol.SwarmNode, 0, len(list))
-	for _, n := range list {
+	result := make([]protocol.SwarmNode, 0, len(list.Items))
+	for _, n := range list.Items {
 		result = append(result, protocol.SwarmNode{
 			ID:           n.ID,
 			Hostname:     n.Description.Hostname,
@@ -70,14 +69,12 @@ func Nodes(ctx context.Context, cli *client.Client) ([]protocol.SwarmNode, error
 }
 
 func Tasks(ctx context.Context, cli *client.Client, serviceID string) ([]protocol.SwarmTask, error) {
-	f := filters.NewArgs()
-	f.Add("service", serviceID)
-	list, err := cli.TaskList(ctx, swarm.TaskListOptions{Filters: f})
+	list, err := cli.TaskList(ctx, client.TaskListOptions{Filters: client.Filters{}.Add("service", serviceID)})
 	if err != nil {
 		return nil, err
 	}
-	result := make([]protocol.SwarmTask, 0, len(list))
-	for _, t := range list {
+	result := make([]protocol.SwarmTask, 0, len(list.Items))
+	for _, t := range list.Items {
 		containerID := ""
 		if t.Status.ContainerStatus != nil {
 			containerID = t.Status.ContainerStatus.ContainerID
@@ -102,22 +99,22 @@ func Tasks(ctx context.Context, cli *client.Client, serviceID string) ([]protoco
 // ForceUpdate forces a rolling update by bumping the service's force_update
 // counter — the swarm equivalent of "redeploy with the current spec".
 func ForceUpdate(ctx context.Context, cli *client.Client, serviceID string) error {
-	service, _, err := cli.ServiceInspectWithRaw(ctx, serviceID, swarm.ServiceInspectOptions{})
+	res, err := cli.ServiceInspect(ctx, serviceID, client.ServiceInspectOptions{})
 	if err != nil {
 		return err
 	}
-	spec := service.Spec
+	spec := res.Service.Spec
 	spec.TaskTemplate.ForceUpdate++
-	_, err = cli.ServiceUpdate(ctx, serviceID, service.Version, spec, swarm.ServiceUpdateOptions{})
+	_, err = cli.ServiceUpdate(ctx, serviceID, client.ServiceUpdateOptions{Version: res.Service.Version, Spec: spec})
 	return err
 }
 
 func Scale(ctx context.Context, cli *client.Client, serviceID string, targetReplicas uint64) error {
-	service, _, err := cli.ServiceInspectWithRaw(ctx, serviceID, swarm.ServiceInspectOptions{})
+	res, err := cli.ServiceInspect(ctx, serviceID, client.ServiceInspectOptions{})
 	if err != nil {
 		return err
 	}
-	spec := service.Spec
+	spec := res.Service.Spec
 
 	switch {
 	case spec.Mode.Global != nil:
@@ -128,6 +125,6 @@ func Scale(ctx context.Context, cli *client.Client, serviceID string, targetRepl
 		spec.Mode.Replicated = &swarm.ReplicatedService{Replicas: &targetReplicas}
 	}
 
-	_, err = cli.ServiceUpdate(ctx, serviceID, service.Version, spec, swarm.ServiceUpdateOptions{})
+	_, err = cli.ServiceUpdate(ctx, serviceID, client.ServiceUpdateOptions{Version: res.Service.Version, Spec: spec})
 	return err
 }
