@@ -11,8 +11,15 @@ class StacksStore extends PollingStore {
   loading = $state(false);
   error = $state("");
 
+  protected reset() {
+    this.stacks = [];
+    this.savedStacks = [];
+    this.containers = [];
+    this.error = "";
+  }
+
   async refresh() {
-    const hostId = hostsStore.activeHostId;
+    const hostId = this.beginLoad();
     if (!hostId) return;
 
     if (this.savedStacks.length === 0 && this.stacks.length === 0) {
@@ -26,14 +33,16 @@ class StacksStore extends PollingStore {
         api.getSavedStacks(hostId),
         api.getContainers(hostId),
       ]);
+      if (this.stale(hostId)) return;
       this.stacks = d;
       this.savedStacks = s;
       this.containers = c;
     } catch (err: any) {
+      if (this.stale(hostId)) return;
       this.error = err?.response?.data ?? String(err);
       toast.error(`Failed to load stacks: ${this.error}`);
     } finally {
-      this.loading = false;
+      if (!this.stale(hostId)) this.loading = false;
     }
   }
 

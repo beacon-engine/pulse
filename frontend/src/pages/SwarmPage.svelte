@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { untrack } from "svelte";
   import { api } from "../lib/api";
   import { swarmStore } from "../stores/swarm.svelte";
   import { hostsStore } from "../stores/hosts.svelte";
@@ -11,8 +11,10 @@
   let updatingService = $state("");
   let serviceTokens = $state<Record<string, string | null>>({});
 
-  onMount(() => {
-    swarmStore.startPolling(15000);
+  // Reload as soon as the environment changes, not at the next poll.
+  $effect(() => {
+    if (!hostsStore.activeHostId) return;
+    untrack(() => swarmStore.startPolling(15000));
     return () => swarmStore.stopPolling();
   });
 

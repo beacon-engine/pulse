@@ -63,13 +63,21 @@ class MetricsStore extends PollingStore {
     return result;
   }
 
+  protected reset() {
+    this.hw = null;
+    this.hwError = "";
+  }
+
   async loadHardware() {
-    const hostId = hostsStore.activeHostId;
+    const hostId = this.beginLoad();
     if (!hostId) return;
     try {
-      this.hw = await api.getHardwareMetrics(hostId);
+      const hw = await api.getHardwareMetrics(hostId);
+      if (this.stale(hostId)) return;
+      this.hw = hw;
       this.hwError = "";
     } catch (e: any) {
+      if (this.stale(hostId)) return;
       this.hwError = e?.response?.data ?? String(e);
     }
   }

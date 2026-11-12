@@ -1,8 +1,8 @@
 import { writable } from 'svelte/store';
 
-export type Route = 'containers' | 'stacks' | 'events' | 'kubernetes' | 'swarm' | 'metrics' | 'resources' | 'users' | 'settings' | 'hosts';
+export type Route = 'dashboard' | 'containers' | 'stacks' | 'events' | 'kubernetes' | 'swarm' | 'metrics' | 'resources' | 'users' | 'settings' | 'hosts';
 
-const ROUTES: Route[] = ['containers', 'stacks', 'events', 'kubernetes', 'swarm', 'metrics', 'resources', 'users', 'settings', 'hosts'];
+const ROUTES: Route[] = ['dashboard', 'containers', 'stacks', 'events', 'kubernetes', 'swarm', 'metrics', 'resources', 'users', 'settings', 'hosts'];
 
 // The hash holds the page and the active environment: #/kubernetes?env=<id>.
 // Keeping the environment in the URL makes a refresh, a bookmark or a shared
@@ -10,7 +10,7 @@ const ROUTES: Route[] = ['containers', 'stacks', 'events', 'kubernetes', 'swarm'
 function parseHash(): { route: Route; env: string | null } {
   const raw = window.location.hash.replace(/^#\/?/, '');
   const [path, query = ''] = raw.split('?');
-  const route = ROUTES.includes(path as Route) ? (path as Route) : 'containers';
+  const route = ROUTES.includes(path as Route) ? (path as Route) : 'dashboard';
   return { route, env: new URLSearchParams(query).get('env') };
 }
 
@@ -27,9 +27,9 @@ export function envFromUrl(): string | null {
   return parseHash().env;
 }
 
-/** Go to a page, staying on the current environment. */
-export function navigate(route: Route) {
-  window.location.hash = buildHash(route, parseHash().env);
+/** Go to a page, on the current environment or the one given. */
+export function navigate(route: Route, env?: string) {
+  window.location.hash = buildHash(route, env ?? parseHash().env);
 }
 
 /** Record the active environment in the URL. `replace` rewrites the current
