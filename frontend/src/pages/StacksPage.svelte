@@ -3,6 +3,8 @@
   import { hostsStore } from "../stores/hosts.svelte";
   import { containersStore } from "../stores/container.svelte";
   import { toast } from "../lib/toast.svelte";
+  import { webhookUrl as fullWebhookUrl } from "../lib/webhooks";
+  import WebhookUrl from "../components/WebhookUrl.svelte";
   import type { EnvVar, SavedStack } from "../types/containers";
 
   // Polling lifecycle tied to host readiness
@@ -153,12 +155,7 @@
 
   function webhookUrl(s: SavedStack): string {
     if (!s.webhook_token) return "";
-    return `${window.location.origin}/api/webhooks/${s.host_id}/stacks/${s.id}/redeploy?token=${s.webhook_token}`;
-  }
-
-  function copyUrl(s: SavedStack) {
-    navigator.clipboard.writeText(webhookUrl(s));
-    toast.success("Webhook URL copied");
+    return fullWebhookUrl(`${s.host_id}/stacks/${s.id}/redeploy`, { token: s.webhook_token });
   }
 </script>
 
@@ -278,15 +275,8 @@
                   </svg>
                   Webhook active
                 </span>
-                <code class="webhook-url-preview">
-                  {webhookUrl(s).replace(window.location.origin, "")}
-                </code>
+                <div class="webhook-url-cell"><WebhookUrl url={webhookUrl(s)} /></div>
                 <div class="webhook-actions">
-                  <button
-                    class="btn-ghost btn-xs"
-                    onclick={() => copyUrl(s)}
-                    title="Copy webhook URL">Copy URL</button
-                  >
                   <button
                     class="btn-ghost btn-xs"
                     onclick={() => rotateToken(s)}
@@ -702,18 +692,9 @@
         color: var(--green);
         white-space: nowrap;
     }
-    .webhook-url-preview {
-        font-family: "JetBrains Mono", monospace;
-        font-size: 10.5px;
-        color: var(--mist);
-        background: var(--surface-2);
-        padding: 3px 8px;
-        border-radius: 4px;
-        flex: 1;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        max-width: 340px;
+    .webhook-url-cell {
+        flex: 1 1 320px;
+        min-width: 0;
     }
     .webhook-actions {
         display: flex;

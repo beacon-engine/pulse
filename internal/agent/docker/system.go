@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 
 	"github.com/beacon-engine/pulse/internal/protocol"
 )
@@ -12,10 +12,11 @@ import (
 // ── System info ──────────────────────────────────────────────────────────────
 
 func SystemInfo(ctx context.Context, cli *client.Client) (protocol.SystemInfo, error) {
-	info, err := cli.Info(ctx)
+	res, err := cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return protocol.SystemInfo{}, err
 	}
+	info := res.Info
 	return protocol.SystemInfo{
 		DockerVersion:     info.ServerVersion,
 		APIVersion:        "1.43",

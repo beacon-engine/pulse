@@ -7,6 +7,7 @@
   import Pagination from "../components/Pagination.svelte";
   import K8sContainerRow from "../components/K8sContainerRow.svelte";
   import K8sPodDrawer from "../components/K8sPodDrawer.svelte";
+  import K8sWebhookModal from "../components/K8sWebhookModal.svelte";
   import type { K8sPod, K8sWorkload, PodContainer } from "../types/containers";
   import { fmtAge } from "../utils/fmt";
   import {
@@ -240,6 +241,8 @@
     }
   }
 
+  let webhookFor = $state<K8sWorkload | null>(null);
+
   async function restart(w: K8sWorkload) {
     if (!confirm(`Rolling restart of ${w.kind} "${w.name}"? Pods are replaced one by one.`)) return;
     busy = { ...busy, [wkey(w)]: true };
@@ -472,6 +475,9 @@
                       disabled={w.protected || busy[wkey(w)]} onclick={() => restart(w)}>
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8" /><path d="M3 3v5h5" /></svg>
                     </button>
+                    <button class="act-btn" title="Restart webhook for CI/CD" aria-label="Restart webhook" onclick={() => (webhookFor = w)}>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -688,6 +694,10 @@
       <Pagination {page} perPage={PER_PAGE} total={events.length} onpage={(p) => (page = p)} />
     {/if}
   </div>
+{/if}
+
+{#if webhookFor && hostsStore.activeHostId}
+  <K8sWebhookModal hostId={hostsStore.activeHostId} workload={webhookFor} onclose={() => (webhookFor = null)} />
 {/if}
 
 {#if inspectedPod}

@@ -4,7 +4,7 @@ import (
 	"context"
 	"sort"
 
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 
 	"github.com/beacon-engine/pulse/internal/agent/selfguard"
 	"github.com/beacon-engine/pulse/internal/protocol"

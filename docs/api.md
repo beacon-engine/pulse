@@ -76,8 +76,17 @@ change something need the `admin` role; viewers get `403`.
 
 ## Webhooks
 
-Trigger a redeploy from CI. Enable a webhook to get its token, then call the
-action with `?token=<token>`. Action calls also need a signed-in session.
+Trigger a redeploy from CI. Enable a webhook in the dashboard (container
+drawer, Stacks, Swarm, or a Kubernetes workload's webhook button), which shows
+the full URL to call. Action calls need only their `?token=`, no session, so a
+CI job can make them:
+
+```bash
+curl -fsS -X POST 'https://pulse.example.com/api/webhooks/<host_id>/k8s/shop/Deployment/web/restart?token=<token>'
+```
+
+Managing tokens, and the id-based `recreate` (which has no token), need a
+signed-in session.
 
 | Method | Path | Description |
 |---|---|---|
@@ -86,7 +95,8 @@ action with `?token=<token>`. Action calls also need a signed-in session.
 | POST | `/api/webhooks/{host_id}/{container_id}/recreate` | Recreate a container |
 | POST | `/api/webhooks/{host_id}/stacks/{stack_id}/redeploy` | Redeploy a stack |
 | POST | `/api/webhooks/{host_id}/swarm/{service_id}/update` · `/scale` | Update / scale a Swarm service |
-| POST | `/api/webhooks/{host_id}/k8s/{namespace}/{deployment}/rollout` | Rolling restart of a Deployment |
+| POST | `/api/webhooks/{host_id}/k8s/{namespace}/{kind}/{name}/restart` | Rolling restart of a Deployment, StatefulSet or DaemonSet (token key `namespace:kind:name`) |
+| POST | `/api/webhooks/{host_id}/k8s/{namespace}/{deployment}/rollout` | Rolling restart of a Deployment (older form, token key `namespace/deployment`) |
 
 ## Events and monitoring
 

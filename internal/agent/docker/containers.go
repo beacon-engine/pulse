@@ -9,17 +9,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 
 	"github.com/beacon-engine/pulse/internal/agent/selfguard"
 	"github.com/beacon-engine/pulse/internal/protocol"
@@ -30,16 +28,13 @@ import (
 // ── List ─────────────────────────────────────────────────────────────────────
 
 func List(ctx context.Context, cli *client.Client, self selfguard.Self) ([]protocol.ContainerInfo, error) {
-	f := filters.NewArgs()
-	for _, s := range []string{"running", "exited", "paused", "created"} {
-		f.Add("status", s)
-	}
-	list, err := cli.ContainerList(ctx, container.ListOptions{All: true, Filters: f})
+	f := client.Filters{}.Add("status", "running", "exited", "paused", "created")
+	list, err := cli.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: f})
 	if err != nil {
 		return nil, err
 	}
-	result := make([]protocol.ContainerInfo, 0, len(list))
-	for _, c := range list {
+	result := make([]protocol.ContainerInfo, 0, len(list.Items))
+	for _, c := range list.Items {
 		name := ""
 		if len(c.Names) > 0 {
 			name = strings.TrimPrefix(c.Names[0], "/")
@@ -50,7 +45,7 @@ func List(ctx context.Context, cli *client.Client, self selfguard.Self) ([]proto
 			Name:            name,
 			Image:           c.Image,
 			Status:          c.Status,
-			State:           c.State,
+			State:           string(c.State),
 			Stack:           containerStack(c.Labels),
 			Protected:       reason != "",
 			ProtectedReason: reason,
@@ -76,22 +71,23 @@ func containerStack(labels map[string]string) *string {
 // ── Inspect ──────────────────────────────────────────────────────────────────
 
 func Inspect(ctx context.Context, cli *client.Client, self selfguard.Self, id string) (protocol.ContainerDetail, error) {
-	info, err := cli.ContainerInspect(ctx, id)
+	res, err := cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 	if err != nil {
 		return protocol.ContainerDetail{}, err
 	}
+	info := res.Container
 
-	var ports []protocol.ContainerPort
+	ports := []protocol.ContainerPort{}
 	if info.NetworkSettings != nil {
 		for p, bindings := range info.NetworkSettings.Ports {
 			for _, b := range bindings {
-				hostIP := b.HostIP
-				if hostIP == "" {
-					hostIP = "0.0.0.0"
+				hostIP := "0.0.0.0"
+				if b.HostIP.IsValid() {
+					hostIP = b.HostIP.String()
 				}
 				ports = append(ports, protocol.ContainerPort{
 					ContainerPort: p.Port(),
-					Protocol:      p.Proto(),
+					Protocol:      string(p.Proto()),
 					HostIP:        hostIP,
 					HostPort:      b.HostPort,
 				})
@@ -100,7 +96,8 @@ func Inspect(ctx context.Context, cli *client.Client, self selfguard.Self, id st
 		sort.Slice(ports, func(i, j int) bool { return ports[i].ContainerPort < ports[j].ContainerPort })
 	}
 
-	var mounts []protocol.ContainerMount
+	// Empty lists, not null: the dashboard reads their length.
+	mounts := []protocol.ContainerMount{}
 	for _, m := range info.Mounts {
 		mounts = append(mounts, protocol.ContainerMount{
 			Source:      m.Source,
@@ -117,19 +114,21 @@ func Inspect(ctx context.Context, cli *client.Client, self selfguard.Self, id st
 		RestartCount: int64(info.RestartCount),
 		Ports:        ports,
 		Mounts:       mounts,
+		Env:          []string{},
+		Cmd:          []string{},
 	}
 	var labels map[string]string
 	if info.Config != nil {
 		detail.Image = info.Config.Image
-		detail.Env = info.Config.Env
-		detail.Cmd = []string(info.Config.Cmd)
+		detail.Env = append(detail.Env, info.Config.Env...)
+		detail.Cmd = append(detail.Cmd, info.Config.Cmd...)
 		labels = info.Config.Labels
 	}
 	detail.ProtectedReason = self.ContainerProtection(info.ID, labels)
 	detail.Protected = detail.ProtectedReason != ""
 	detail.Kubernetes = selfguard.KubeletRef(labels)
 	if info.State != nil {
-		detail.State = info.State.Status
+		detail.State = string(info.State.Status)
 		detail.StartedAt = info.State.StartedAt
 		detail.FinishedAt = info.State.FinishedAt
 	}
@@ -141,76 +140,25 @@ func Inspect(ctx context.Context, cli *client.Client, self selfguard.Self, id st
 }
 
 func InspectRaw(ctx context.Context, cli *client.Client, id string) (json.RawMessage, error) {
-	info, err := cli.ContainerInspect(ctx, id)
+	res, err := cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(info)
+	return json.Marshal(res.Container)
 }
 
 // ── Recreate variants ────────────────────────────────────────────────────────
 
-// recreateWith stops+removes the container and re-creates it under the same name
-// from a freshly-built config, optionally pulling the image first.
-func recreateWith(ctx context.Context, cli *client.Client, id string, mutate func(cfg *container.Config, hc *container.HostConfig), pull bool) (string, error) {
-	info, err := cli.ContainerInspect(ctx, id)
-	if err != nil {
-		return "", err
-	}
-	name := strings.TrimPrefix(info.Name, "/")
-
-	oldCfg := info.Config
-	hc := info.HostConfig
-	if oldCfg == nil {
-		oldCfg = &container.Config{}
-	}
-	if hc == nil {
-		hc = &container.HostConfig{}
-	}
-
-	newCfg := &container.Config{
-		Image:  oldCfg.Image,
-		Cmd:    oldCfg.Cmd,
-		Env:    oldCfg.Env,
-		Labels: oldCfg.Labels,
-	}
-	if mutate != nil {
-		mutate(newCfg, hc)
-	}
-
-	// Best-effort stop, then force remove.
-	timeout := 5
-	_ = cli.ContainerStop(ctx, id, container.StopOptions{Timeout: &timeout})
-	if err := cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true}); err != nil {
-		return "", err
-	}
-
-	if pull && newCfg.Image != "" {
-		rc, err := cli.ImagePull(ctx, newCfg.Image, image.PullOptions{})
+func Recreate(ctx context.Context, cli *client.Client, id string, newPorts []protocol.PortMap) (string, error) {
+	bindings := network.PortMap{}
+	for _, pm := range newPorts {
+		key, err := network.ParsePort(fmt.Sprintf("%s/%s", pm.ContainerPort, pm.Protocol))
 		if err != nil {
 			return "", err
 		}
-		_, _ = io.Copy(io.Discard, rc) // drain so the pull completes
-		_ = rc.Close()
+		bindings[key] = []network.PortBinding{{HostIP: netip.IPv4Unspecified(), HostPort: pm.HostPort}}
 	}
-
-	created, err := cli.ContainerCreate(ctx, newCfg, hc, nil, nil, name)
-	if err != nil {
-		return "", err
-	}
-	if err := cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
-		return "", err
-	}
-	return created.ID, nil
-}
-
-func Recreate(ctx context.Context, cli *client.Client, id string, newPorts []protocol.PortMap) (string, error) {
 	return recreateWith(ctx, cli, id, func(_ *container.Config, hc *container.HostConfig) {
-		bindings := nat.PortMap{}
-		for _, pm := range newPorts {
-			key := nat.Port(fmt.Sprintf("%s/%s", pm.ContainerPort, pm.Protocol))
-			bindings[key] = []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: pm.HostPort}}
-		}
 		hc.PortBindings = bindings
 	}, false)
 }
@@ -228,7 +176,7 @@ func UpdateEnv(ctx context.Context, cli *client.Client, id string, env []string)
 // ── Logs / exec ──────────────────────────────────────────────────────────────
 
 func Logs(ctx context.Context, cli *client.Client, id string, tail uint32) (string, error) {
-	rc, err := cli.ContainerLogs(ctx, id, container.LogsOptions{
+	rc, err := cli.ContainerLogs(ctx, id, client.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Tail:       strconv.FormatUint(uint64(tail), 10),
@@ -246,7 +194,7 @@ func Logs(ctx context.Context, cli *client.Client, id string, tail uint32) (stri
 }
 
 func Exec(ctx context.Context, cli *client.Client, id string, cmd []string) (string, error) {
-	exec, err := cli.ContainerExecCreate(ctx, id, container.ExecOptions{
+	exec, err := cli.ExecCreate(ctx, id, client.ExecCreateOptions{
 		AttachStdout: true,
 		AttachStderr: true,
 		Cmd:          cmd,
@@ -254,7 +202,7 @@ func Exec(ctx context.Context, cli *client.Client, id string, cmd []string) (str
 	if err != nil {
 		return "", err
 	}
-	attach, err := cli.ContainerExecAttach(ctx, exec.ID, container.ExecStartOptions{})
+	attach, err := cli.ExecAttach(ctx, exec.ID, client.ExecAttachOptions{})
 	if err != nil {
 		return "", err
 	}
@@ -269,15 +217,18 @@ func Exec(ctx context.Context, cli *client.Client, id string, cmd []string) (str
 // ── Basic actions ────────────────────────────────────────────────────────────
 
 func Start(ctx context.Context, cli *client.Client, id string) error {
-	return cli.ContainerStart(ctx, id, container.StartOptions{})
+	_, err := cli.ContainerStart(ctx, id, client.ContainerStartOptions{})
+	return err
 }
 
 func Stop(ctx context.Context, cli *client.Client, id string) error {
 	t := 10
-	return cli.ContainerStop(ctx, id, container.StopOptions{Timeout: &t})
+	_, err := cli.ContainerStop(ctx, id, client.ContainerStopOptions{Timeout: &t})
+	return err
 }
 
 func Restart(ctx context.Context, cli *client.Client, id string) error {
 	t := 10
-	return cli.ContainerRestart(ctx, id, container.StopOptions{Timeout: &t})
+	_, err := cli.ContainerRestart(ctx, id, client.ContainerRestartOptions{Timeout: &t})
+	return err
 }

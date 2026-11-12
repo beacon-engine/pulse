@@ -19,7 +19,7 @@ func (st *State) Routes() http.Handler {
 
 	protected := auth.RequireAuth(st.DB, auth.EnforceRole(mux))
 	return metrics.CountRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isPublicPath(r.URL.Path) {
+		if isPublicPath(r.URL.Path) || isTokenWebhook(mux, r) {
 			mux.ServeHTTP(w, r)
 			return
 		}
@@ -29,8 +29,8 @@ func (st *State) Routes() http.Handler {
 
 // isPublicPath reports whether a path bypasses session auth. Mirrors the Rust
 // `public` router, plus the static SPA (so the login page loads). `/ws` (the UI
-// event feed) and all other `/api/*` routes are protected. Webhook action
-// endpoints are session-protected too, per the Rust route table.
+// event feed) and all other `/api/*` routes are protected. Webhook
+// actions are public too but token-checked: see tokenWebhooks.
 func isPublicPath(path string) bool {
 	switch path {
 	case "/health", "/metrics", "/api/status", "/agent/ws", "/api/auth/setup", "/api/auth/login":
@@ -41,6 +41,27 @@ func isPublicPath(path string) bool {
 	}
 	// Anything not under /api/ is a static asset (SPA) → public.
 	return !strings.HasPrefix(path, "/api/")
+}
+
+// tokenWebhooks are the webhook actions a CI job calls with only the
+// webhook's ?token=, which the handler checks. They're matched by route
+// pattern, not path prefix, so token management and the legacy id-based
+// recreate (which has no token) still need a session.
+var tokenWebhooks = map[string]bool{
+	"POST /api/webhooks/{host_id}/containers/{name}/deploy":              true,
+	"POST /api/webhooks/{host_id}/stacks/{stack_id}/redeploy":            true,
+	"POST /api/webhooks/{host_id}/swarm/{service_id}/update":             true,
+	"POST /api/webhooks/{host_id}/swarm/{service_id}/scale":              true,
+	"POST /api/webhooks/{host_id}/k8s/{namespace}/{deployment}/rollout":  true,
+	"POST /api/webhooks/{host_id}/k8s/{namespace}/{kind}/{name}/restart": true,
+}
+
+func isTokenWebhook(mux *http.ServeMux, r *http.Request) bool {
+	if !strings.HasPrefix(r.URL.Path, "/api/webhooks/") {
+		return false
+	}
+	_, pattern := mux.Handler(r)
+	return tokenWebhooks[pattern]
 }
 
 func (st *State) registerRoutes(mux *http.ServeMux) {
@@ -151,6 +172,7 @@ func (st *State) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/webhooks/{host_id}/swarm/{service_id}/update", st.handleWebhookUpdateSwarm)
 	mux.HandleFunc("POST /api/webhooks/{host_id}/swarm/{service_id}/scale", st.handleWebhookScaleSwarm)
 	mux.HandleFunc("POST /api/webhooks/{host_id}/k8s/{namespace}/{deployment}/rollout", st.handleWebhookK8sRollout)
+	mux.HandleFunc("POST /api/webhooks/{host_id}/k8s/{namespace}/{kind}/{name}/restart", st.handleWebhookK8sRestart)
 
 	// ── Observability ────────────────────────────────────────────────────────────
 	mux.HandleFunc("GET /metrics", metrics.Handler)

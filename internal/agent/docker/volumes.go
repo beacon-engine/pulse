@@ -3,9 +3,7 @@ package docker
 import (
 	"context"
 
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 
 	"github.com/beacon-engine/pulse/internal/protocol"
 )
@@ -13,15 +11,12 @@ import (
 // ── Volumes ──────────────────────────────────────────────────────────────────
 
 func ListVolumes(ctx context.Context, cli *client.Client) ([]protocol.VolumeInfo, error) {
-	list, err := cli.VolumeList(ctx, volume.ListOptions{})
+	list, err := cli.VolumeList(ctx, client.VolumeListOptions{})
 	if err != nil {
 		return nil, err
 	}
-	result := make([]protocol.VolumeInfo, 0, len(list.Volumes))
-	for _, v := range list.Volumes {
-		if v == nil {
-			continue
-		}
+	result := make([]protocol.VolumeInfo, 0, len(list.Items))
+	for _, v := range list.Items {
 		result = append(result, protocol.VolumeInfo{
 			Name:       v.Name,
 			Driver:     v.Driver,
@@ -33,13 +28,14 @@ func ListVolumes(ctx context.Context, cli *client.Client) ([]protocol.VolumeInfo
 }
 
 func DeleteVolume(ctx context.Context, cli *client.Client, name string) error {
-	return cli.VolumeRemove(ctx, name, true)
+	_, err := cli.VolumeRemove(ctx, name, client.VolumeRemoveOptions{Force: true})
+	return err
 }
 
 func PruneVolumes(ctx context.Context, cli *client.Client) (int64, error) {
-	report, err := cli.VolumesPrune(ctx, filters.NewArgs())
+	res, err := cli.VolumePrune(ctx, client.VolumePruneOptions{})
 	if err != nil {
 		return 0, err
 	}
-	return int64(report.SpaceReclaimed), nil
+	return int64(res.Report.SpaceReclaimed), nil
 }
