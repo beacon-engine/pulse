@@ -10,7 +10,9 @@ RUN --mount=type=cache,target=/root/.npm \
     npm ci
 
 COPY frontend/ ./
-RUN npm run build
+# Shown in the dashboard. CI passes the release version (see VERSION).
+ARG PULSE_VERSION=dev
+RUN PULSE_VERSION=${PULSE_VERSION} npm run build
 
 # ─────────────────────────────── 2. Go Builder ───────────────────────────────
 FROM golang:1.26-bookworm AS go-builder
@@ -24,10 +26,13 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY cmd ./cmd
 COPY internal ./internal
+# Linked into both binaries. CI passes the release version (see VERSION).
+ARG PULSE_VERSION=dev
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/agent ./cmd/agent && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/gateway ./cmd/gateway
+    LDFLAGS="-s -w -X github.com/beacon-engine/pulse/internal/version.Version=${PULSE_VERSION}" && \
+    CGO_ENABLED=0 go build -trimpath -ldflags="$LDFLAGS" -o /out/agent ./cmd/agent && \
+    CGO_ENABLED=0 go build -trimpath -ldflags="$LDFLAGS" -o /out/gateway ./cmd/gateway
 
 # ─────────────────────────────── Target 1: Agent ─────────────────────────────
 # The agent shells out to `docker compose`, so the runtime needs the Docker CLI.

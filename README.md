@@ -364,6 +364,26 @@ and a Docker socket.
 > `stack up/down`). The **gateway** image embeds its SQL migrations at compile
 > time, so it's a single self-contained binary.
 
+Add `--build-arg PULSE_VERSION=<version>` to stamp the binaries and dashboard;
+without it they report `dev`.
+
+### Releases
+
+The version lives in [`VERSION`](VERSION) (`X.Y.Z`, no `v`). CI publishes
+images from `master`, and `master` only takes release branches:
+
+1. Cut `release/vX.Y.Z` (or `hotfix/vX.Y.Z`) and merge the finished feature
+   branches into it.
+2. Set `VERSION` and `frontend/package.json`'s `version` to `X.Y.Z`.
+3. Open a PR into `master`. CI rejects any other branch, a name that doesn't
+   match `VERSION`, or a version that is already tagged.
+4. Merge. The release workflow pushes `pulse-gateway` and `pulse-agent` as
+   `X.Y.Z`, `X.Y`, `latest` and `sha-<commit>`, then tags the commit `vX.Y.Z`
+   and creates a GitHub release.
+
+A push to `master` whose version is already tagged only refreshes `latest` and
+`sha-<commit>`, and those builds report `X.Y.Z-dev+<commit>`.
+
 ### Host metrics from inside a container
 
 The agent's hardware metrics come from the machine it runs on:

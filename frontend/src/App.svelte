@@ -30,6 +30,7 @@
   import { debounce } from "./lib/timing";
   import type { Container } from "./types/containers";
   import type { Environment, Requirement } from "./types/environments";
+  import { PULSE_VERSION_LABEL } from "./lib/version";
 
   // ── Theme ─────────────────────────────────────────────────────────────────
   let theme = $state<"light" | "dark">("light");
@@ -430,7 +431,7 @@
             </button>
           </div>
         {/if}
-        <div class="version">Pulse v0.1.0</div>
+        <div class="version">Pulse {PULSE_VERSION_LABEL}</div>
       </div>
     </nav>
 

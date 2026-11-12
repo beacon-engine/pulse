@@ -17,6 +17,7 @@ import (
 
 	"github.com/beacon-engine/pulse/internal/gateway"
 	"github.com/beacon-engine/pulse/internal/gateway/storage"
+	"github.com/beacon-engine/pulse/internal/version"
 )
 
 func main() {
@@ -26,7 +27,7 @@ func main() {
 		os.Exit(healthcheck())
 	}
 
-	log.Println("Starting Pulse gateway v0.1.0 (Go version)")
+	log.Printf("Starting Pulse gateway %s (Go version)", version.Version)
 
 	cfg := gateway.LoadConfig()
 	// Cancel on SIGINT/SIGTERM so the server and background watcher shut down

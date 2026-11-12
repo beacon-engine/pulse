@@ -14,6 +14,47 @@ permissions:
   contents: read
 
 jobs:
+  # ── 0. Release Branch Policy ─────────────────────────────────────────────────
+  # Master only takes release/vX.Y.Z and hotfix/vX.Y.Z branches; merging one
+  # publishes that version (see release.yml). Feature branches merge into a
+  # release branch first.
+  release-branch:
+    name: Release Branch Policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Branch name, VERSION and package.json agree, and the version is new
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          case "$HEAD_REF" in
+            release/v*|hotfix/v*) ;;
+            *)
+              echo "::error::Only release/vX.Y.Z or hotfix/vX.Y.Z branches merge into master (this is '$HEAD_REF'). Merge it into a release branch instead."
+              exit 1 ;;
+          esac
+          v=$(tr -d '[:space:]' < VERSION)
+          if [[ ! "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=VERSION::VERSION must be X.Y.Z, got '$v'"
+            exit 1
+          fi
+          if [ "${HEAD_REF#*/}" != "v$v" ]; then
+            echo "::error file=VERSION::Branch '$HEAD_REF' doesn't match VERSION ($v). Set VERSION to ${HEAD_REF#*/v}."
+            exit 1
+          fi
+          pkg=$(node -p "require('./frontend/package.json').version")
+          if [ "$pkg" != "$v" ]; then
+            echo "::error file=frontend/package.json::frontend/package.json version ($pkg) doesn't match VERSION ($v)."
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v$v" >/dev/null; then
+            echo "::error file=VERSION::v$v is already released. Bump VERSION (and the branch name)."
+            exit 1
+          fi
+          echo "Releasing v$v on merge."
+
   # ── 1. Go Checks & Tests ─────────────────────────────────────────────────────
   go-check:
     name: Go (Format, Vet, Tests)

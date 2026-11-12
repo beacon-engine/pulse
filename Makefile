@@ -1,5 +1,7 @@
 # Pulse dev tasks. Requires Go 1.26+. `make tools` installs air + dlv.
 GOBIN := $(shell go env GOPATH)/bin
+VERSION := $(shell cat VERSION 2>/dev/null || echo dev)
+LDFLAGS := -X github.com/beacon-engine/pulse/internal/version.Version=$(VERSION)
 
 .PHONY: help tools build test fmt vet check \
         watch-gateway watch-agent debug-gateway debug-agent \
@@ -15,8 +17,8 @@ tools: ## Install dev tools (air for hot-reload, dlv for debugging)
 	@echo "Installed to $(GOBIN) — make sure it's on your PATH."
 
 build: ## Build both binaries into ./bin
-	go build -o ./bin/agent ./cmd/agent
-	go build -o ./bin/gateway ./cmd/gateway
+	go build -ldflags "$(LDFLAGS)" -o ./bin/agent ./cmd/agent
+	go build -ldflags "$(LDFLAGS)" -o ./bin/gateway ./cmd/gateway
 
 test: ## Run all Go tests
 	go test ./... -count=1

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { PULSE_VERSION_LABEL } from '../lib/version';
   let { active, onchange }: { active: string; onchange: (view: string) => void } = $props();
 
   const nav = [
@@ -27,7 +28,7 @@
     {/each}
   </nav>
 
-  <div class="version">v0.1.0</div>
+  <div class="version">{PULSE_VERSION_LABEL}</div>
 </aside>
 
 <style>
