@@ -4,7 +4,8 @@ Run the published images with Docker Compose: no source checkout, no build.
 Pulse then manages the server's own containers, and any other servers or
 clusters you connect to it.
 
-**Images:** `beaconengine/pulse-gateway` and `beaconengine/pulse-agent` on
+**Images:** [`beaconengine/pulse-gateway`](https://hub.docker.com/r/beaconengine/pulse-gateway)
+and [`beaconengine/pulse-agent`](https://hub.docker.com/r/beaconengine/pulse-agent) on
 Docker Hub, tagged by version (`0.1.0`, `0.1`), `latest`, and `sha-<commit>`.
 They are built for **linux/amd64 only**, so an ARM server (AWS Graviton,
 Ampere, Raspberry Pi) can't run them yet.

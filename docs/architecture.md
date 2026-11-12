@@ -45,9 +45,6 @@ otherwise the default agent (`AGENT_ADDR`). A push environment whose agent is
 disconnected fails with "not connected" rather than falling through to another
 agent, which would show the wrong machine's data.
 
-[design/push-pull-transport.md](design/push-pull-transport.md) has the original
-design.
-
 ## Self-registration and liveness
 
 ### Identity
@@ -100,17 +97,20 @@ To add PostgreSQL: implement `Repository` in a `postgres.go` in that package
 
 ## Footprint
 
-Measured with [`scripts/benchmark.sh`](../scripts/benchmark.sh): release builds,
-Apple Silicon, one agent and one gateway, SQLite.
+Measured with [`scripts/benchmark.sh`](../scripts/benchmark.sh) on v0.1.1
+(November 2026): release builds, Apple Silicon, one agent connected to Docker
+and Kubernetes, one gateway, SQLite, 30 s per run.
 
 | Process | State | Peak memory (RSS) | Average CPU |
 |---|---|---|---|
-| agent | idle | ~19.8 MB | ~0.0% |
-| gateway | idle | ~17.7 MB | ~0.4% |
-| agent | load | ~19.9 MB | ~0.1% |
-| gateway | load | ~18.0 MB | ~4.0% |
+| agent | idle | ~19.0 MB | ~0.0% |
+| gateway | idle | ~19.1 MB | ~0.0% |
+| agent | load | ~19.4 MB | ~0.0% |
+| gateway | load | ~19.1 MB | ~2.4% |
 
-"Load" is continuous `/health`, `/metrics` and `/api/hosts` requests. Reproduce
+"Load" is continuous `/health`, `/metrics` and `/api/hosts` requests. Each
+sign-in briefly adds about 64 MB to the gateway: Argon2id password hashing uses
+that much memory by design, and Go hands it back to the OS shortly after. Reproduce
 it with the stack running:
 
 ```bash
